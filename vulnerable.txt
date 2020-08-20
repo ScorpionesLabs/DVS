@@ -1,0 +1,14 @@
+﻿Run
+DDEInitiate
+CommandLine
+CreateObject
+RegisterXLL
+File
+Explore
+Execute*
+*Shell*
+Navigate*
+AddCode
+AddFromString
+NewCurrentDatabase
+Eval
