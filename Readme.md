@@ -15,7 +15,7 @@ The huge idea, is that the tool can also execute commands using non-vulnerable D
 
 *Compatible with PowerShell 2.0 and up*
 
-**Youtube Video PoC**: [DVS](https://dvs.scorpiones.io)
+**Youtube Video PoC**: [DVS](https://youtu.be/FAjwybmFJAA)
 
 ## Disclaimer
 This tool is for testing and educational purposes only. Any other usage for this code is not allowed. Use at your own risk.  
