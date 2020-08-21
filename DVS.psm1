@@ -8,6 +8,14 @@ The author or any Internet provider bears NO responsibility for misuse of this t
 By using this you accept the fact that any damage caused by the use of this tool is your responsibility.
 #>
 
+
+$global:debug = $false # When debug is on, youll see the communication between the namedpipe server with our namedpipe client
+$global:NamedPipe = "DVS" # Namedpipe name
+$global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
+$global:converter = New-Object System.Management.ManagementClass Win32_SecurityDescriptorHelper # Security Descriptor converter
+$global:SleepMilisecondsTime = 50 # How long time to sleep until get response
+
+
 $global:NativeFunctions = @( # Collects all builtin functions in order to skip them
                             [System.String](""), [System.Int32](1), [System.Boolean]($true),
                             [System.Array](1,2), @{"A"="B"}
@@ -16,12 +24,6 @@ $global:NativeFunctions = @( # Collects all builtin functions in order to skip t
         %{$_.Name}
     }
 }| Select -Unique
-
-$global:NamedPipe = "DVS" # Namedpipe name
-$global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
-$global:debug = $false # When debug is on, youll see the communication between the namedpipe server with our namedpipe client
-$global:converter = New-Object System.Management.ManagementClass Win32_SecurityDescriptorHelper # Security Descriptor converter
-$global:SleepMilisecondsTime = 50 # How long time to sleep until get response
 
 
 <# Access mask calculation:
@@ -1786,12 +1788,7 @@ Start-NamedPipeManager -pipeName [DVS_NAME]
         }
         Write-Log -Level VERBOSE -Message "NamedPipe listener is ready!"
         if(!$Username.Contains("\")) {
-            if(is-DomainJoinedUserSession -RemoteIP $RemoteIP) {
-                $Domain = $env:USERDOMAIN
-            } else {
-                $Domain = "workgroup"
-            }
-            
+            $Domain = "workgroup"
         } else {
             $Domain, $Username = $Username.Split("\")
         }
@@ -2279,7 +2276,6 @@ function Connect-RemoteRegistry {
         [string]$Hive
     )
     # This function is responsible to try to access remote-registry protocol (MS-RRP)
-    
     if(!(Check-TCPConnection -RemoteIP $RemoteIP -Port 445)) { # Checks if SMB port is open.
         Write-Log -Level ERROR -Message "SMB port is closed, cant interact with Remote registry!"
         return $false
@@ -2295,6 +2291,7 @@ function Connect-RemoteRegistry {
         Write-Log -Level ERROR -Message "The access to the Remote-Registry denied!"
         return $false
     }
+    
     Write-Log -Level VERBOSE -Message "Remote Registry negotiated successfully ($Hive)!"
     return $true
 
@@ -4068,33 +4065,50 @@ function Invoke-RegisterRemoteSchema {
         foreach($RemoteIP in (Enum-HostList -HostList $HostList)) {
             try {
                 Start-DefaultTasks -Type StartTask|Out-Null
-                if(!(Start-DefaultTasks -Type TaskChecks -RemoteIP $RemoteIP -Username $Username -Password $Password -AutoGrant:$AutoGrant)) {
+                if(!(Start-DefaultTasks -Type TaskChecks -RemoteIP $RemoteIP -Username $Username -Password $Password -NoAuth)) {
                     return
+                } 
+
+                if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM)) {
+                    Write-Log -Level ERROR -Message "HKLM is not readable!."
+                    $DCOMList = $DCOMWithNavigationFunctionality
+                    $isHKLMWritable = $false
+                } else {
+                
+                    if(!(Test-DCOMStatus -AutoGrant:$AutoGrant) -and !$Force) {
+                        return
+                    }
+                    
+                    $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant -forceVerbose
+                    $DCOMList = New-Object System.Collections.ArrayList
+                    foreach($dcom in $DCOMWithNavigationFunctionality) {
+                        if(!(is-GUID $dcom)) {
+                            $dcom = Get-CLSID -ProgID $dcom
+                        }
+                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $dcom -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant -forceVerbose
+                        if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
+                            Write-Log -Level ERROR -Message "You dont have permissions to access $($dcom) object!"
+                            continue
+                        }
+                        $DCOMList.Add($dcom)|Out-Null
+                    }
+                    if(!$DCOMList) {
+                        Write-Log -Level ERROR -Message "The user has not granted to launch the used DCOM objects."
+                        return
+                    }
+                    $isHKLMWritable = Check-RegistryPermission -RemoteIP $RemoteIP -Key "Software\Classes" -CheckWritePermissions
+                    if(!$isHKLMWritable) {
+                        Write-Log -Level ERROR -Message "HKLM is not writable!" -forceVerbose
+                    }
+
                 }
 
-                $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant -forceVerbose
-                $DCOMList = New-Object System.Collections.ArrayList
-                foreach($dcom in $DCOMWithNavigationFunctionality) {
-                    if(!(is-GUID $dcom)) {
-                        $dcom = Get-CLSID -ProgID $dcom
-                    }
-                    $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $dcom -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant -forceVerbose
-                    if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
-                        Write-Log -Level ERROR -Message "You dont have permissions to access $($dcom) object!"
-                        continue
-                    }
-                    $DCOMList.Add($dcom)|Out-Null
-                }
-                if(!$DCOMList) {
-                    Write-Log -Level ERROR -Message "The user has not granted to launch the used DCOM objects."
-                    return
-                }
+                
                 
                 # if HKLM is not writable, Check if the user is an active user using browsing the available SIDs inside the HKU hive
                 # if it is available, change the hive to the current user, otherwise, return
                 $isHKLM = $true
-                if(!(Check-RegistryPermission -RemoteIP $RemoteIP -Key "Software\Classes" -CheckWritePermissions)) {
-                    Write-Log -Level VERBOSE -Message "HKLM is not writable!"
+                if(!$isHKLMWritable) {
                     Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKU|Out-Null
                     $SID = (Get-userSID -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]).Trim()
                     if($SID -and (Find-InArray -Content $SID -Array (Get-RegKeyName -Key "")) -and (Find-InArray -Content "Software" -Array (Get-RegKeyName -Key $SID))) {
@@ -4140,7 +4154,7 @@ function Invoke-RegisterRemoteSchema {
                         }
                         
                         if(Quit-COMObject) {
-                            Write-Log -Level VERBOSE -Message "$($dcom) quitted successfully"
+                            Write-Log -Level VERBOSE -Message "$($dcom) quitted successfully" 
                         }
                     }
                     if($isCommandExecuted) {
