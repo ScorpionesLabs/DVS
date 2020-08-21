@@ -5,15 +5,17 @@ Assuming we have valid credentials/active session with access to a remote machin
 expected or a highly-monitored method (i.e. WMI, Task Scheduler, WinRM, PowerShell Remoting).  
 For these scenarios, the DVS framework comes to the rescue.
 
-The DVS framework is a swiss army knife which allows you to enumerate vulnerable functions of remote DCOM objects, launch them and even attack using them.
+The DVS framework is a swiss army knife which allows you to enumerate vulnerable functions of remote DCOM objects, launch them and even attack using them.  
 The framework is being developed with a "Red Team" mindset and uses stealth methods to compromise remote machines.  
 The DVS framework contains various ways to bypass remote hardening against DCOM by re-enableing DCOM access *remotely* and automatically grant the required
 permissions to the attacking user.  
 The framework can also revert changes on the remote machine to their original state, prior to the attack.
 
-The huge idea, is that the tool can also execute commands using non-vulnerable DCOM objects using incredible technique (Read below about Invoke-RegisterRemoteSchema)
+The huge idea, is that the tool can also execute commands using non-vulnerable DCOM objects using an incredible technique (Read below about Invoke-RegisterRemoteSchema)
 
 *Compatible with PowerShell 2.0 and up*
+
+**Youtube Video PoC**: [DVS](https://dvs.scorpiones.io)
 
 ## Disclaimer
 This tool is for testing and educational purposes only. Any other usage for this code is not allowed. Use at your own risk.  
@@ -85,21 +87,22 @@ The DVS tool first checks if principal-identity has access to the remote machine
 ### License
 * GPL v3
 
-### Scenarios checked
+### Checked Scenarios
 * Out-of domain to domain
 * From inside the domain to another domain-joined machine
 * From domain to out-of-domain
 * From current-session to another domain-joined machine
 
-### OS checked
+### Checked Operating Systems
 * Windows 7 SP1
 * Windows 8.1
 * Windows 10
 * Windows Server 2019
 
+
 ### Credits
 * Thanks to [Rafel Ivgi](https://twitter.com/rafelivgi?lang=en) for mentoring, and helping with the architecture mindset of the tool.
-* Thanks to Yossi Sasi for helping me to optimize the script.
+* Thanks to [Yossi Sasi](https://github.com/yossisassi/) for helping me to optimize the script.
 
 ## Installation:
 
@@ -194,7 +197,13 @@ Invoke-ExecutionCommand function executes commands via DCOM Object using the log
 
 #### Invoke-RegisterRemoteSchema
 
-Invoke-RegisterRemoteSchema function executes commands via InternetExplorer.Application's object using the logged-on user or provided credentials.
+Invoke-RegisterRemoteSchema function executes commands via one of the following objects object using the logged-on user or provided credentials:
+* ShellBrowserWindow
+* ShellWindows
+* Internet Explorer
+* ielowutil.exe
+
+**Note:** These objects doesn't need access to local machine hive, it will proceed with the foothold with any user that can access the remote machine!
 
 * Examples:
   1. Executes "cmd /c calc" command on 10.211.55.1/24 remote machine using the current logged-on session, and grant privileges if is needed
