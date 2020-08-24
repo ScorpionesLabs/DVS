@@ -209,7 +209,7 @@ Invoke-RegisterRemoteSchema function executes commands via one of the following 
 * Examples:
   1. Executes "cmd /c calc" command on 10.211.55.1/24 remote machine using the current logged-on session, and grant privileges if is needed
 
-            PS> Invoke-RegisterRemoteSchema -HostList 10.211.55.1/24 -Command cmd /c "calc"
+            PS> Invoke-RegisterRemoteSchema -HostList 10.211.55.1/24 -Command "cmd /c calc"
 
   2. Executes "cmd /c calc" command on 10.211.55.4 remote machine using the current logged-on session using provided credentials
 
