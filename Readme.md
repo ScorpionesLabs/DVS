@@ -103,7 +103,7 @@ The DVS tool first checks if principal-identity has access to the remote machine
 ### Credits
 * Thanks to [Rafel Ivgi](https://twitter.com/rafelivgi?lang=en) for mentoring, and helping with the architecture mindset of the tool.
 * Thanks to [Yossi Sasi](https://github.com/yossisassi/) for helping me to optimize the script.
-* Thanks to [Gleb Glazkov](https://twitter.com/Gl3bGl4z) for wrote the mitigation and preventions section
+* Thanks to [Gleb Glazkov](https://twitter.com/Gl3bGl4z) for writing the mitigation and preventions section
 
 ## Installation:
 
@@ -238,14 +238,17 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
 
 * Enable Domain and Private Profiles in Windows Defender Firewall
   * The DVS tool bypasses this security control by creating a rule in the firewall to allow any Dynamic RPC connection.
-* Hardenning user access rights can prevent this attack.
-  * By using Group Pocily Objects an organization can remove *administrators*, *users* and other groups from the list, and move to using a special group/user for central management that does not interactivly log in to other computers.
+
+* Move to using [LAPS](https://support.microsoft.com/en-us/help/3062591/microsoft-security-advisory-local-administrator-password-solution-laps) in order to shorten the attack surface. If each computer in the domain has a different local administrator password, this account can't be used for lateral movement.
+
+* Hardening user access rights can prevent this attack.
+  * By using Group Policy Objects an organization can remove *administrators*, *users* and other groups from the list, and move to using a special group/user for central management that does not interactivly log in to other computers.
 
         [Computer Configuration\Windows Settings\Security Settings\Local Policies\User Rights Assignment\Access this computer from the network]
 
     In Official hardening guides like CIS the recommend setting of [*Access this computer from the network*] is with the values of "**administrators** and **Remote Desktop Users** or **Authenticated users**". This recommendations are vulnerable to the DVS tool.
 * Harden the DCOM permissions by removing the rights of  **administrators** from the permissions - **Remote Launch** and **Remote Activation**.
-  * **[Computer Configuration\Windows Settings\Local Policies\Security Options\DCOM]: Machine Launch Restrictions in Security Descriptor Definition Language (SDDL) syntax**
+  * **[Computer Configuration\Windows Settings\Local Policies\Security Options\DCOM]: Machine Launch Restrictions in Security Descriptor Definition Language ([SDDL](https://docs.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-definition-language-for-conditional-aces-)) syntax**
 
 * Use an application firewall to block DCOM access between computers. Especially from a computer which is not part of the IT or management infrastructure.
 
@@ -278,7 +281,7 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
 
 * Use an application aware firewall to block DCOM access between computers. Especially from a computer which is not part of the IT or management infrastructure.
 
-* Intrustion prevention system (e.g. Snort, Suricata) can be used to detect DCOM protocol which is based on RPC (MS-RPC, MS-RPCE) and Remote registry protcol (MS-RRP).
+* Intrusion prevention system (e.g. Snort, Suricata) can be used to detect DCOM protocol which is based on RPC (MS-RPC, MS-RPCE) and Remote registry protocol (MS-RRP).
   * [Possible Snort rule](https://www.snort.org/rule-docs/1-569)
 
 * Monitor Windows Defender firewall by enabling audit log on blocked traffic for **domain** and **private** profiles.
@@ -295,7 +298,7 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
   Browse to this registry key: [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Ole]
 Create new DWORDs with value of '1' called **ActivationFailureLoggingLevel** | **CallFailureLoggingLevel** | **InvalidSecurityDescriptorLoggingLevel**
 
-  * 4624 (Successful Logon) - A blue team can create corollation of events to catch connections from remote machines to DCOM. An example:
+  * 4624 (Successful Logon) - A blue team can create correlation of events to catch connections from remote machines to DCOM. An example:
     - event ID 4624 - Logon
     - Account Name: SYSTEM
     - Process Name: **C:\Windows\System32\services.exe**
@@ -311,7 +314,7 @@ Create new DWORDs with value of '1' called **ActivationFailureLoggingLevel** | *
      * User: User
      * Domain: DOMAIN
      * Workstation: ATTACKER
-     * Process: **C:\Windows\System32\mmc.exe** or **C:\Windows\System32\dllhost.exe** or **C:\Windows\System32\svchost.exe** or **C:\Program Files\Internet Explorer\iexplore.exe**
+     * Process: **C:\Windows\System32\mmc.exe**/**C:\Windows\System32\dllhost.exe**/**C:\Windows\System32\svchost.exe**/**C:\Program Files\Internet Explorer\iexplore.exe**
      * Logon type: 3
   * 10010 (Microsoft-Windows-DistributedCOM) - The server %1 did not register with DCOM within the required timeout.
   * 10014 (Microsoft-Windows-DistributedCOM) - for failed CLSID activasion due to disabled remote activation settings for COM+.
