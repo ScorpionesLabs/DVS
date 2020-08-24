@@ -314,7 +314,7 @@ Create new DWORDs with value of '1' called **ActivationFailureLoggingLevel** | *
      * User: User
      * Domain: DOMAIN
      * Workstation: ATTACKER
-     * Process: **C:\Windows\System32\mmc.exe**/**C:\Windows\System32\dllhost.exe**/**C:\Windows\System32\svchost.exe**/**C:\Program Files\Internet Explorer\iexplore.exe**
+     * Process: **C:\Windows\System32\mmc.exe** / **C:\Windows\System32\dllhost.exe** / **C:\Windows\System32\svchost.exe** / **C:\Program Files\Internet Explorer\iexplore.exe**
      * Logon type: 3
   * 10010 (Microsoft-Windows-DistributedCOM) - The server %1 did not register with DCOM within the required timeout.
   * 10014 (Microsoft-Windows-DistributedCOM) - for failed CLSID activasion due to disabled remote activation settings for COM+.
