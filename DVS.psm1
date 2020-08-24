@@ -9,7 +9,7 @@ By using this you accept the fact that any damage caused by the use of this tool
 #>
 
 # Add NetAPI libraries
-        Add-Type -MemberDefinition @"
+Add-Type -MemberDefinition @"
         [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern uint NetApiBufferFree(IntPtr Buffer);
         [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -4119,6 +4119,7 @@ function Invoke-RegisterRemoteSchema {
                         if(!(Test-DCOMStatus -AutoGrant:$AutoGrant) -and !$Force) {
                             continue
                         }
+                        $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
                     }
                     $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
                     $DCOMList = New-Object System.Collections.ArrayList
