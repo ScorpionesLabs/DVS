@@ -49,7 +49,7 @@ By using this you accept the fact that any damage caused by the use of this tool
 The DVS tool first checks if principal-identity has access to the remote machine via the following steps:
 
 * Basic actions
-  1. Authentication operations (if `NoAuth` is not flagged)
+  1. Authentication operations (if `SkipRegAuth` is not flagged)
      1. If credentials are provided, it creates a "net-only" session. otherwise, it will use the current-logged on session.
      2. Probe registry access.
   2. Check if DCOM feature is enabled
