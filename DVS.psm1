@@ -8,17 +8,6 @@ The author or any Internet provider bears NO responsibility for misuse of this t
 By using this you accept the fact that any damage caused by the use of this tool is your responsibility.
 #>
 
-# Add NetAPI libraries
-Add-Type -MemberDefinition @"
-        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern uint NetApiBufferFree(IntPtr Buffer);
-        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern int NetGetJoinInformation(
-          string server,
-          out IntPtr NameBuffer,
-      out int BufferType);
-"@ -Namespace Win32Api -Name NetApi32
-
 $global:debug = $false # When debug is on, youll see the communication between the namedpipe server with our namedpipe client
 $global:NamedPipe = "DVS" # Namedpipe name
 $global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
@@ -482,6 +471,47 @@ function Get-DomainNameFromRemoteRegistryHKCU {
     
 }
 
+function Get-DomainNameFromRemoteNetBIOSPacket {
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteIP
+    )
+    if($RemoteIP -eq "127.0.0.1") {
+        return ""
+    }
+    try {
+        $HostName = Get-GetHostByAddress -RemoteIP $RemoteIP
+        $udpobject = new-Object system.Net.Sockets.Udpclient
+        $udpobject.Connect($RemoteIP,137)
+        $udpobject.Client.ReceiveTimeout = 2500
+        [byte[]]$Bytes = @(0xff, 0xff, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x43, 0x4b, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x00, 0x00, 0x21, 0x00, 0x0)
+        [void]$udpobject.Send($Bytes,$Bytes.length)
+        $remoteendpoint = New-Object system.net.ipendpoint([system.net.ipaddress]::Any,0)
+        $receivebytes = $udpobject.Receive([ref]$remoteendpoint)
+        $udpobject.Close()
+        $TotalResults = [System.BitConverter]::ToString($receivebytes[56])
+
+        $results = $receivebytes[57..$receivebytes.Count]
+        for($i = 0; $i -lt $TotalResults; $i++) {
+            $flatBit = [System.BitConverter]::ToString($results[((18 * $i) + 15)])
+            if($flatBit -ne "00") {
+                continue
+            }
+            $NetBIOSname = ([System.Text.Encoding]::ASCII.GetString($results[(18 * $i)..((18 *$i) + 14)])).Trim().ToLower()
+            if($NetBIOSname -eq $HostName) {
+                continue
+            }
+            return $NetBIOSname
+        }
+        
+    } catch {
+        Write-Log -Level ERROR -Message $_
+        return ""
+    }
+}
+
 function Get-DomainNameFromRemoteNetBIOS {
     [CmdletBinding(SupportsShouldProcess=$true)]
     [OutputType([string])]
@@ -491,24 +521,11 @@ function Get-DomainNameFromRemoteNetBIOS {
     )
     # This function is responsible to resolve domain name via remote NetBIOS over TCP (like nbtstat)
 
-    try {
-        $pNameBuffer = [IntPtr]::Zero
-        $joinStatus = 0
-        $apiResult = [Win32Api.NetApi32]::NetGetJoinInformation(
-            $RemoteIP,          # lpServer
-            [Ref] $pNameBuffer, # lpNameBuffer
-            [Ref] $joinStatus   # BufferType
-        )
-        if ( $apiResult -eq 0 ) {
-            $domain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($pNameBuffer)
-            [Void] [Win32Api.NetApi32]::NetApiBufferFree($pNameBuffer)
-            return $domain.ToLower()
-        }
-        return ""
-    } catch {
-        Write-Log -Level ERROR -Message $_ -forceVerbose
+     $res = Invoke-NamedpipeMission -MissionInfo @{FunctionName="Get-DomainNameFromRemoteNetBIOS"; Arguments=@{RemoteIP=$RemoteIP}}
+    if(!$res.IsSuccess) {
         return ""
     }
+    return $res.Result
 }
 
 function Get-DomainNameFromRemoteMachine {
@@ -520,14 +537,22 @@ function Get-DomainNameFromRemoteMachine {
     )
 
     <#
-        This function is responsible to resolve the domain name from the remote machine using Get-DomainNameFromRemoteNetBIOS function.
+        This function is responsible to resolve the domain name from the remote machine using DomainNameFromRemoteNetBIOSPacket function,
+        if it failse, it will try to resolve it using Get-DomainNameFromRemoteNetBIOS function.
         If it fails, it will try to resolve it using DomainNameFromRemoteRegistryHKLM function
         if it fails, it will try to resole it using DomainNameFromRemoteRegistryHKCU.
     #>
     if(!$global:RemoteDomain) {
+        $DomainName = Get-DomainNameFromRemoteNetBIOSPacket -RemoteIP $RemoteIP
+        if($DomainName) {
+            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: NetBIOS Packet"
+            $global:RemoteDomain = $DomainName
+            return $DomainName
+        }
+
         $DomainName = Get-DomainNameFromRemoteNetBIOS -RemoteIP $RemoteIP
         if($DomainName) {
-            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: NetBIOS"
+            Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: NetBIOS NetAPI"
             $global:RemoteDomain = $DomainName
             return $DomainName
         }
@@ -539,7 +564,10 @@ function Get-DomainNameFromRemoteMachine {
             return $DomainName
         }
 
+        $Hive = $global:ChoosenHive
+        Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKCU|Out-Null
         $DomainName = Get-DomainNameFromRemoteRegistryHKCU
+        Test-RegistryConnection -RemoteIP $RemoteIP -Hive $Hive|Out-Null
         if($DomainName) {
             Write-Log -Level VERBOSE -Message "Remote Domain: $($DomainName) | Technique: Registry (HKCU)"
             $global:RemoteDomain = $DomainName
@@ -884,6 +912,18 @@ $global:SleepMilisecondsTime = [SLEEPTIME]
 $global:RunSpaceClosedList = New-Object System.Collections.ArrayList
 
 
+# Add NetAPI libraries
+Add-Type -MemberDefinition @"
+        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern uint NetApiBufferFree(IntPtr Buffer);
+        [DllImport("netapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern int NetGetJoinInformation(
+          string server,
+          out IntPtr NameBuffer,
+      out int BufferType);
+"@ -Namespace Win32Api -Name NetApi32
+
+
 # NamedPipe functions
 function Start-NamedPipeServer {
     [OutputType([System.Array])]
@@ -1172,6 +1212,35 @@ function Get-UserSIDUsingADSI {
             return $true, (New-Object System.Security.Principal.SecurityIdentifier($ObjectSID,0)).Value
         }
         return $false, "$($Username) user not found (ADSI)!"
+    } catch {
+        return $false, $_
+    }
+}
+
+
+function Get-DomainNameFromRemoteNetBIOS {
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteIP
+    )
+    # This function is responsible to resolve domain name via remote NetBIOS over TCP (like nbtstat)
+
+    try {
+        $pNameBuffer = [IntPtr]::Zero
+        $joinStatus = 0
+        $apiResult = [Win32Api.NetApi32]::NetGetJoinInformation(
+            $RemoteIP,          # lpServer
+            [Ref] $pNameBuffer, # lpNameBuffer
+            [Ref] $joinStatus   # BufferType
+        )
+        if ($apiResult -eq 0) {
+            $domain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($pNameBuffer)
+            [Void] [Win32Api.NetApi32]::NetApiBufferFree($pNameBuffer)
+            return $true, $domain.ToLower()
+        }
+        return $false, "NetGetJoinInformation does not have results"
     } catch {
         return $false, $_
     }
@@ -2163,7 +2232,7 @@ function is-LoopBack {
     )
 
     # This function is responsible to check if the IP Address is a loopback address
-    return (Find-InArray -Content $RemoteIP.ToLower() -Array @('localhost', '127.0.0.1'))
+    return ($RemoteIP -eq "127.0.0.1")
     
 }
 
@@ -3094,6 +3163,9 @@ function Get-UserSIDUsingADSI {
         [string]$Username
     )
     $res = Invoke-NamedpipeMission -MissionInfo @{FunctionName="Get-UserSIDUsingADSI"; Arguments=@{RemoteIP=[string]$RemoteIP; Username=$Username}}
+    if(!$res.IsSuccess) {
+        return ""
+    }
     return $res.Result
     
 
@@ -4208,7 +4280,6 @@ function Invoke-RegisterRemoteSchema {
                         break
                     }
                 }
-
                 Write-Log -Level INFO -Message "Reverting the machine to the previous state"
                 [System.Array]::Reverse($ExploitationSequences)|Out-Null
                 foreach($ExploitOperation in $ExploitationSequences) {

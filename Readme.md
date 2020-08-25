@@ -1,5 +1,7 @@
 # D(COM) V(ulnerability) S(canner) AKA Devious swiss army knife - Lateral movement using DCOM Objects
 
+[Devious](DEVIOUS.png)
+
 Did you ever wonder how you can move laterally through internal networks? or interact with remote machines without alerting EDRs?  
 Let's assume that we have a valid credentials, or an active session with access to a remote machine, but we are without an option for executing a process remotely in a known, expected or a highly-monitored method (i.e. WMI, Task Scheduler, WinRM, PowerShell Remoting).
 
@@ -52,7 +54,7 @@ The DVS tool first checks if principal-identity has access to the remote machine
   3. Allow DCOM Access (if `AutoGrant` flagged), otherwise fail
   4. Check if the logged-on user/provided user and the groups the user is a member of (Via `adsi/WindowsIdentity` feature), are granted to interact with the DCOM (via remote registry queries)
   5. Grant permissions (if `AutoGrant` flagged), otherwise, fail
-  6. Resolve domain name from remote machine using NetBIOS over TCP, if it fails it will try using remote registry protocol (`MS-RRP`)
+  6. Resolve domain name from remote machine using NetBIOS over TCP(Using NetAPI32, or UDP Packet), if it fails it will try using the registry (`HKLM` or `HKCU` Hives)
 
 * `Invoke-DCOMObjectScan`
   1. Interact with DCOM objects
