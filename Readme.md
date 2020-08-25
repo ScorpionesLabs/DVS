@@ -258,7 +258,7 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
     * explorer.exe -> regsvr.exe
     * visio.exe -> wmic.exe
     * excel.exe -> Rundll32.exe
-    * outlook -> cmd.exe
+    * outlook.exe -> cmd.exe
 
 * [Microsoft attack surface reduction rules can be used to prevent vulnerable processes from spawning dangerous child processes](https://docs.microsoft.com/en-us/windows/security/threat-protection/microsoft-defender-atp/attack-surface-reduction).
 
