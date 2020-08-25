@@ -239,7 +239,7 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
 * Enable Domain and Private Profiles in Windows Defender Firewall
   * The DVS tool bypasses this security control by creating a rule in the firewall to allow any Dynamic RPC connection.
 
-* Move to using [LAPS](https://support.microsoft.com/en-us/help/3062591/microsoft-security-advisory-local-administrator-password-solution-laps) in order to shorten the attack surface. If each computer in the domain has a different local administrator password, this account can't be used for lateral movement.
+* Move to using [LAPS](https://support.microsoft.com/en-us/help/3062591/microsoft-security-advisory-local-administrator-password-solution-laps) in order to reduce the attack surface. If each computer in the domain has a different local administrator password, this account can't be used for lateral movement.
 
 * Hardening user access rights can prevent this attack.
   * By using Group Policy Objects an organization can remove *administrators*, *users* and other groups from the list, and move to using a special group/user for central management that does not interactivly log in to other computers.
@@ -250,7 +250,7 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
 * Harden the DCOM permissions by removing the rights of  **administrators** from the permissions - **Remote Launch** and **Remote Activation**.
   * **[Computer Configuration\Windows Settings\Local Policies\Security Options\DCOM]: Machine Launch Restrictions in Security Descriptor Definition Language ([SDDL](https://docs.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-definition-language-for-conditional-aces-)) syntax**
 
-* Use an application firewall to block DCOM access between computers. Especially from a computer which is not part of the IT or management infrastructure.
+* Use a host-based firewall /application-aware firewall to block DCOM access between computers. Especially for a computer which is not part of the IT or management infrastructure.
 
 * Application control rules can be used as last circle of security controls to prevent vulnerable processes from spawning dangerous child processes or loading DLLs.  
   Examples:
@@ -258,7 +258,7 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
     * explorer.exe -> regsvr.exe
     * visio.exe -> wmic.exe
     * excel.exe -> Rundll32.exe
-    * outlook -> start.exe
+    * outlook -> cmd.exe
 
 * [Microsoft attack surface reduction rules can be used to prevent vulnerable processes from spawning dangerous child processes](https://docs.microsoft.com/en-us/windows/security/threat-protection/microsoft-defender-atp/attack-surface-reduction).
 
