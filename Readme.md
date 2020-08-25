@@ -264,19 +264,20 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
 * Harden the DCOM permissions by removing the rights of  **administrators** from the permissions - **Remote Launch** and **Remote Activation**.
   * **[Computer Configuration\Windows Settings\Local Policies\Security Options\DCOM]: Machine Launch Restrictions in Security Descriptor Definition Language ([SDDL](https://docs.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-definition-language-for-conditional-aces-)) syntax**
 
-* Use an application firewall to block DCOM access between computers. Especially from a computer which is not part of the IT or management infrastructure
+* Use a host-based firewall / application-aware firewall to block DCOM access between computers. Especially for a computer which is not part of the IT or management infrastructure.
 
 * Application control rules can be used as last circle of security controls to prevent vulnerable processes from spawning dangerous child processes or loading DLLs.  
   Examples:
-  ```
+    ```
     mmc.exe -> cmd.exe
     explorer.exe -> regsvr.exe
     visio.exe -> wmic.exe
     excel.exe -> Rundll32.exe
-    outlook -> start.exe
-  ```
-  
-* [Microsoft attack surface reduction rules can be used to prevent vulnerable processes from spawning dangerous child processes](https://docs.microsoft.com/en-us/windows/security/threat-protection/microsoft-defender-atp/attack-surface-reduction)
+    outlook.exe -> cmd.exe
+    ```
+
+* [Microsoft attack surface reduction rules can be used to prevent vulnerable processes from spawning dangerous child processes](https://docs.microsoft.com/en-us/windows/security/threat-protection/microsoft-defender-atp/attack-surface-reduction).
+
 
 
 ### Detection
