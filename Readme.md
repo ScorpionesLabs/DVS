@@ -1,67 +1,74 @@
 # D(COM) V(ulnerability) S(canner) AKA Devious swiss army knife - Lateral movement using DCOM Objects
 
-Did you ever wonder how you can move laterally through internal networks. Interact with remote machines without alerting EDRs?  
-Assuming we have valid credentials/active session with access to a remote machine, without executing a process remotely in a known,  
-expected or a highly-monitored method (i.e. WMI, Task Scheduler, WinRM, PowerShell Remoting).  
+Did you ever wonder how you can move laterally through internal networks? or interact with remote machines without alerting EDRs?  
+Let's assume that we have a valid credentials, or an active session with access to a remote machine, but we are without an option for executing a process remotely in a known, expected or a highly-monitored method (i.e. WMI, Task Scheduler, WinRM, PowerShell Remoting).
+
 For these scenarios, the DVS framework comes to the rescue.
 
-The DVS framework is a swiss army knife which allows you to enumerate vulnerable functions of remote DCOM objects, launch them and even attack using them.  
+The DVS framework is a swiss army knife which allows you to enumerate vulnerable functions of remote DCOM objects, launch them and even launch attacks using them.  
+
 The framework is being developed with a "Red Team" mindset and uses stealth methods to compromise remote machines.  
+
 The DVS framework contains various ways to bypass remote hardening against DCOM by re-enableing DCOM access *remotely* and automatically grant the required
 permissions to the attacking user.  
-The framework can also revert changes on the remote machine to their original state, prior to the attack.
 
-The huge idea, is that the tool can also execute commands using non-vulnerable DCOM objects using an incredible technique (Read below about Invoke-RegisterRemoteSchema)
+The framework can also revert changes on the remote machine to their original state, prior to the attack - hiding these changes from defenders.
+
+Our main insight is that the tool can also execute commands using non-vulnerable DCOM objects through an aqsome technique (Read below about Invoke-RegisterRemoteSchema)
 
 *Compatible with PowerShell 2.0 and up*
 
 **Youtube Video PoC**: [DVS](https://youtu.be/FAjwybmFJAA)
 
 ## Disclaimer
+
 This tool is for testing and educational purposes only. Any other usage for this code is not allowed. Use at your own risk.  
-The author or any Internet provider bears NO responsibility for misuse of this tool.  
+The author bears NO responsibility for misuse of this tool.  
 By using this you accept the fact that any damage caused by the use of this tool is your responsibility.
 
 ### Registry access - how the DVS framework utilizes that protocol
+
 * Registry access
-  1. Probe 445 port in order to interact with remote registry.
-  2. Check if the remote-registry is enabled.
-  3. Interact with remote registry.
-  4. If AutoGrant mode is flagged, check write permissions. otherwise, check read permissions.
+  1. Probe port 445 port in order to interact with the remote registry
+  2. Check if the remote-registry is enabled
+  3. Interact with the remote registry
+  4. If `AutoGrant` mode is flagged, check write permissions. otherwise, check read permissions
+
 * Standard Registry Provider (*If remote-registry denied*)
-  1. Probe 135 port in order to interact with Standard Registry Provider" using WMI.
-  2. Check if the StdRegProv is accessible.
-  3. Interact with Standard Registry Provider.
-  4. If AutoGrant mode is flagged, check write permissions. otherwise, check read permissions.
+  1. Probe port 135 in order to interact with the "Standard Registry Provider" using WMI
+  2. Check if the `StdRegProv` is accessible
+  3. Interact with the Standard Registry Provider
+  4. If `AutoGrant` mode is flagged, check for write permissions, otherwise, check for read permissions
 
 ### Why is this tool so stealthy?
+
 The DVS tool first checks if principal-identity has access to the remote machine via the following steps:
 
 * Basic actions
-  1. Authentication operations (if NoAuth is not flagged).
+  1. Authentication operations (if `NoAuth` is not flagged)
      1. If credentials are provided, it creates a "net-only" session. otherwise, it will use the current-logged on session.
      2. Probe registry access.
-  2. Check if DCOM feature is enabled.
-  3. Allow DCOM Access (if AutoGrant flagged), otherwise fail.
-  4. Check if the logged-on user/provided user and the groups the user is a member of (Via adsi/WindowsIdentity feature), are granted to interact with the DCOM (via remote registry queries).
-  5. Grant permissions (if AutoGrant flagged), otherwise, fail.
-  6. Resolve domain name from remote machine using NetBIOS over TCP, if it fails it will try using remote registry protocol (MS-RRP).
+  2. Check if DCOM feature is enabled
+  3. Allow DCOM Access (if `AutoGrant` flagged), otherwise fail
+  4. Check if the logged-on user/provided user and the groups the user is a member of (Via `adsi/WindowsIdentity` feature), are granted to interact with the DCOM (via remote registry queries)
+  5. Grant permissions (if `AutoGrant` flagged), otherwise, fail
+  6. Resolve domain name from remote machine using NetBIOS over TCP, if it fails it will try using remote registry protocol (`MS-RRP`)
 
-* Invoke-DCOMObjectScan
-  1. Interact with DCOM objects.
-  2. Enumerate the DCOM object and find vulnerable functions.
-  3. Validate exploitation possibility.
-  4. Generate execution payloads.
-  5. Fetch personal information about the vulnerable DCOM object.
+* `Invoke-DCOMObjectScan`
+  1. Interact with DCOM objects
+  2. Enumerate the DCOM object and find vulnerable functions
+  3. Validate exploitation possibility
+  4. Generate execution payloads
+  5. Fetch personal information about the vulnerable DCOM object
 
-* Get-ExecutionCommand
-  1. Generate execution payloads.
+* `Get-ExecutionCommand`
+  1. Generate execution payloads
 
-* Invoke-ExecutionCommand
-  1. Try to interact with DCOM objects.
-  2. Execute the commands.
+* `Invoke-ExecutionCommand`
+  1. Try to interact with DCOM objects
+  2. Execute the commands
 
-* Invoke-RegisterRemoteSchema
+* `Invoke-RegisterRemoteSchema`
   1. Try to interact with one of the following DCOM Objects:
      * InternetExplorer.Application - InternetExplorer COM Object
      * {D5E8041D-920F-45e9-B8FB-B1DEB82C6E5E} - Another COMObjects belongs to Internet Explorer
@@ -73,27 +80,32 @@ The DVS tool first checks if principal-identity has access to the remote machine
 
 
 ### Tool components
-* Security rights analyzer - Analyzing principal-identity rights to access the remote DCOM object.
-* Remote grant access - Grants logged-on user permissions remotely (In case they were not already granted).
-* DCOM Scanner - Scan and analyze remote/local DCOM objects for vulnerable functions that are provided (Patterns and function names must be specified).
-  When the tool detects a vulnerable function, it will check what arguments the function includes and if the function has the ability to execute commands.
-* DCOM command generator - Generates a PowerShell payload in order to execute on the remote machine.
-* Report - Generates a CSV report with all the information about the vulnerable DCOM object.
-* Command Execution - Execute commands through DCOM objects.
+
+* Security rights analyzer - Analyzing principal-identity rights to access the remote DCOM object
+* Remote grant access - Grants logged-on user permissions remotely (In case they were not already granted)
+* DCOM Scanner - Scan and analyze remote/local DCOM objects for vulnerable functions that are provided (Patterns and function names must be specified)
+  When the tool detects a vulnerable function, it will check what arguments the function includes and if the function has the ability to execute commands
+* DCOM command generator - Generates a PowerShell payload in order to execute on the remote machine
+* Report - Generates a CSV report with all the information about the vulnerable DCOM object
+* Command Execution - Execute commands through DCOM objects
 
 ### Author
+
 * [Nimrod Levy](https://twitter.com/el3ct71k)
 
 ### License
+
 * GPL v3
 
-### Checked Scenarios
+### Tested Scenarios
+
 * Out-of domain to domain
 * From inside the domain to another domain-joined machine
 * From domain to out-of-domain
 * From current-session to another domain-joined machine
 
-### Checked Operating Systems
+### Tested Operating Systems
+
 * Windows 7 SP1
 * Windows 8.1
 * Windows 10
@@ -101,6 +113,7 @@ The DVS tool first checks if principal-identity has access to the remote machine
 
 
 ### Credits
+
 * Thanks to [Rafel Ivgi](https://twitter.com/rafelivgi?lang=en) for mentoring, and helping with the architecture mindset of the tool.
 * Thanks to [Yossi Sasi](https://github.com/yossisassi/) for helping me to optimize the script.
 * Thanks to [Gleb Glazkov](https://twitter.com/Gl3bGl4z) for writing the mitigation and preventions section
@@ -225,11 +238,12 @@ Invoke-RegisterRemoteSchema function executes commands via one of the following 
 MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Model**](https://attack.mitre.org/techniques/T1021/003/)
 
 ### Prevention
-* Disable remote DCOM access.
+
+* Disable remote DCOM access
   * considerations:
-    - Third-party applications dependent on DCOM.
-    - Remote system management using "Windows Management Instrumentation" will not work.
-    - Possible problems with COM objects.
+    - Third-party applications dependent on DCOM
+    - Remote system management using "Windows Management Instrumentation" will not work
+    - Possible problems with COM objects
 * Disallow remote registry access if not required
 
   **Both options are hard to implement in an enterprise environment without an impact on availability.**
@@ -237,12 +251,12 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
   **Nevertheless, it can be a good hardening option for endpoints that don't need domain remote management. (e.g. standalone endpoints)**
 
 * Enable Domain and Private Profiles in Windows Defender Firewall
-  * The DVS tool bypasses this security control by creating a rule in the firewall to allow any Dynamic RPC connection.
+  * The DVS tool bypasses this security control by creating a rule in the firewall to allow any Dynamic RPC connection
 
 * Move to using [LAPS](https://support.microsoft.com/en-us/help/3062591/microsoft-security-advisory-local-administrator-password-solution-laps) in order to reduce the attack surface. If each computer in the domain has a different local administrator password, this account can't be used for lateral movement.
 
-* Hardening user access rights can prevent this attack.
-  * By using Group Policy Objects an organization can remove *administrators*, *users* and other groups from the list, and move to using a special group/user for central management that does not interactivly log in to other computers.
+* Hardening user access rights can prevent this attack
+  * By using Group Policy Objects an organization can remove *administrators*, *users* and other groups from the list, and move to using a special group/user for central management that does not interactivly log in to other computers
 
         [Computer Configuration\Windows Settings\Security Settings\Local Policies\User Rights Assignment\Access this computer from the network]
 
@@ -250,17 +264,20 @@ MITRE Technique: [**T1021.003 - Remote Services: Distributed Component Object Mo
 * Harden the DCOM permissions by removing the rights of  **administrators** from the permissions - **Remote Launch** and **Remote Activation**.
   * **[Computer Configuration\Windows Settings\Local Policies\Security Options\DCOM]: Machine Launch Restrictions in Security Descriptor Definition Language ([SDDL](https://docs.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-definition-language-for-conditional-aces-)) syntax**
 
-* Use a host-based firewall /application-aware firewall to block DCOM access between computers. Especially for a computer which is not part of the IT or management infrastructure.
+* Use a host-based firewall / application-aware firewall to block DCOM access between computers. Especially for a computer which is not part of the IT or management infrastructure.
 
 * Application control rules can be used as last circle of security controls to prevent vulnerable processes from spawning dangerous child processes or loading DLLs.  
   Examples:
-    * mmc.exe -> cmd.exe
-    * explorer.exe -> regsvr.exe
-    * visio.exe -> wmic.exe
-    * excel.exe -> Rundll32.exe
-    * outlook.exe -> cmd.exe
+    ```
+    mmc.exe -> cmd.exe
+    explorer.exe -> regsvr.exe
+    visio.exe -> wmic.exe
+    excel.exe -> Rundll32.exe
+    outlook.exe -> cmd.exe
+    ```
 
 * [Microsoft attack surface reduction rules can be used to prevent vulnerable processes from spawning dangerous child processes](https://docs.microsoft.com/en-us/windows/security/threat-protection/microsoft-defender-atp/attack-surface-reduction).
+
 
 
 ### Detection
