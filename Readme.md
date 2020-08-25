@@ -1,7 +1,5 @@
 # D(COM) V(ulnerability) S(canner) AKA Devious swiss army knife - Lateral movement using DCOM Objects
 
-![Devious](https://raw.githubusercontent.com/ScorpionesLabs/DVS/master/DEVIOUS.png)
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/ScorpionesLabs/DVS/master/DEVIOUS.png">
 </p>
