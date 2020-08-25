@@ -1,6 +1,6 @@
 # D(COM) V(ulnerability) S(canner) AKA Devious swiss army knife - Lateral movement using DCOM Objects
 
-[Devious](https://raw.githubusercontent.com/ScorpionesLabs/DVS/master/DEVIOUS.png)
+![Devious](https://raw.githubusercontent.com/ScorpionesLabs/DVS/master/DEVIOUS.png)
 
 Did you ever wonder how you can move laterally through internal networks? or interact with remote machines without alerting EDRs?  
 Let's assume that we have a valid credentials, or an active session with access to a remote machine, but we are without an option for executing a process remotely in a known, expected or a highly-monitored method (i.e. WMI, Task Scheduler, WinRM, PowerShell Remoting).
