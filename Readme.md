@@ -32,7 +32,7 @@ By using this you accept the fact that any damage caused by the use of this tool
 
 ### Registry access - how the DVS framework utilizes that protocol
 
-* Registry access
+* Remote-Registry access(`MS-RRP`)
   1. Probe port 445 port in order to interact with the remote registry
   2. Check if the remote-registry is enabled
   3. Interact with the remote registry
