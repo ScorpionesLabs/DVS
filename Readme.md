@@ -130,6 +130,7 @@ The DVS tool first checks if principal-identity has access to the remote machine
     PS> Get-Help Invoke-DCOMObjectScan -Detailed  # Get details of the Invoke-DCOMObjectScan command
     PS> Get-Help Get-ExecutionCommand -Detailed # Get details of the Get-ExecutionCommand command
     PS> Get-Help Invoke-ExecutionCommand -Detailed # Get details of the Invoke-ExecutionCommand command
+    PS> Get-Help Invoke-RegisterRemoteSchema -Detailed # Get details of the Invoke-RegisterRemoteSchema command
 
 
 
@@ -196,7 +197,7 @@ Get-ExecutionCommand function allows to generate a PowerShell payload that will 
 
 #### Invoke-ExecutionCommand
 
-Invoke-ExecutionCommand function executes commands via DCOM Object using the logged-on user or provided credentials.
+Invoke-ExecutionCommand function allows to executes commands via DCOM Object using the logged-on user or provided credentials.
 * Examples:
 
   1. Checks for DCOM access,  
@@ -217,20 +218,20 @@ Invoke-ExecutionCommand function executes commands via DCOM Object using the log
 
 #### Invoke-RegisterRemoteSchema
 
-Invoke-RegisterRemoteSchema function executes commands via InternetExplorer.Application's object using the logged-on user or provided credentials.
+Invoke-RegisterRemoteSchema function allows to executes commands via the following DCOM objects using the logged-on user or provided credentials:
 * ShellBrowserWindow
 * ShellWindows
 * Internet Explorer
 * ielowutil.exe
 
-**Note:** This object doesn't need any access to local machine hive, it will proceed with the foothold with any user that can access the remote machine!
+**Note:** These DCOM-objects doesn't need any access to local machine hive. they can foothold with any user that can access the remote machine!
 
 * Examples:
   1. Executes `cmd /c calc` command on `10.211.55.1/24` range using the current logged-on session, and grant privileges if is needed
 
             PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.1/24" -Command "cmd /c calc" -AutoGrant -Verbose
 
-  2. Executes `cmd /c calc` command on 10.211.55.4 remote machine using provided credentials
+  2. Executes `cmd /c calc` command on `10.211.55.4` remote machine using provided credentials
 
             PS> Invoke-RegisterRemoteSchema -HostList "10.211.55.4" -Command "cmd /c calc" -Username "Administrator" -Password "Aa123456!" -Verbose
 
