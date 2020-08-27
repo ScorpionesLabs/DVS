@@ -3090,7 +3090,7 @@ function Invoke-DCOMObjectRightAnalyzer {
     $status = Invoke-SecurityRightAnalyzer -RemoteIP $RemoteIP -Path $ObjectPath -PermissionHashTable $PermissionStatus -AutoGrant:$AutoGrant -DefaultResult $DefaultChecks
     
     if($status) {
-        Write-Log -Level VERBOSE -Message "Your identity is granted to launch and access the $($ObjectName) object!sssss"
+        Write-Log -Level VERBOSE -Message "Your identity is granted to launch and access the $($ObjectName) object!"
     }
     return $status
 }
