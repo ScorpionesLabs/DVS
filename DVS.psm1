@@ -500,7 +500,7 @@ function Get-DomainNameFromRemoteNetBIOSPacket {
                 continue
             }
             $NetBIOSname = ([System.Text.Encoding]::ASCII.GetString($results[(18 * $i)..((18 *$i) + 14)])).Trim().ToLower()
-            if($NetBIOSname -eq $HostName) {
+            if($NetBIOSname -eq $HostName.Split(".")[0]) {
                 continue
             }
             return $NetBIOSname
