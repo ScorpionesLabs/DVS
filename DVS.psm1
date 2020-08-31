@@ -405,7 +405,7 @@ Function Enum-HostList {
     foreach($HostItem in $HostList.Split(",")) {
         $HostItem = $HostItem.Trim()
         if(!($HostItem -match $global:IPRegex -or $HostItem.Contains("/"))) {
-            $IPAddress = Get-GetHostByName($HostItem)
+            $IPAddress = Get-GetHostByName -Hostname $HostItem
             if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
                 % { "127.0.0.1"}
                 continue
