@@ -351,12 +351,7 @@ function Get-GetHostByName {
     if($Hostname -eq $env:COMPUTERNAME) {
         return "127.0.0.1"
     }
-    try {
-        return [System.Net.Dns]::GetHostByName($Hostname).AddressList[0].IPAddressToString
-    } catch {
-        Write-Log -Level ERROR -Message "$Hostname $_" -forceVerbose
-        return ""
-    }
+    return [System.Net.Dns]::GetHostByName($Hostname).AddressList[0].IPAddressToString
 }
 
 
@@ -410,7 +405,11 @@ Function Enum-HostList {
     foreach($HostItem in $HostList.Split(",")) {
         $HostItem = $HostItem.Trim()
         if(!($HostItem -match $global:IPRegex -or $HostItem.Contains("/"))) {
-            $IPAddress = Get-GetHostByName -Hostname $HostItem
+            try {
+                $IPAddress = Get-GetHostByName -Hostname $HostItem
+            } catch {
+                continue
+            }
             if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
                 ForEach-Object { "127.0.0.1"}
                 continue
