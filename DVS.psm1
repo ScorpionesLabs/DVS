@@ -8,7 +8,7 @@ The author or any Internet provider bears NO responsibility for misuse of this t
 By using this you accept the fact that any damage caused by the use of this tool is your responsibility.
 #>
 
-$global:debug = $true # When debug is on, youll see the communication between the namedpipe server with our namedpipe client
+$global:debug = $false # When debug is on, youll see the communication between the namedpipe server with our namedpipe client
 $global:NamedPipe = "DVS" # Namedpipe name
 $global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
 $global:converter = New-Object System.Management.ManagementClass Win32_SecurityDescriptorHelper # Security Descriptor converter
