@@ -787,18 +787,18 @@ function IIf {
 }
 
 function Start-ImpersonationSession {
-    [CmdletBinding()]
-    Param (
-        [Parameter(Mandatory = $True)]
-        [String]$Domain,
-        [Parameter(Mandatory = $True)]
-        [String]$Username,
-        [String]$Password,
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $True)]
+        [String]$Domain,
+        [Parameter(Mandatory = $True)]
+        [String]$Username,
+        [String]$Password,
         [Parameter(Mandatory = $True)]
         [string]$Filename,
         [string]$Arguments,
         [switch]$NetOnly
-    )
+    )
 
     # This function is responsible to create a process using provided credentials/current session for the namedpipe process.
     if(!$Password) {
@@ -1988,7 +1988,7 @@ function Start-DefaultTasks {
             $global:RegAuthenticationMethod = $null
             $global:IsDCOMStatusChanged = $false # If DCOM Is not enabled on the machine and we enable it, restore it
             $global:aclSnapshots = New-Object System.Collections.ArrayList # ACLs snapshot list in order to store SDDL snapshots for each registry key (For further reverting operation to the previous machine state)
-            $global:AppIDDictionary = New-Object @{} # Collected AppID list from SOFTWARE\Classes\Wow6432Node\AppID and SOFTWARE\Classes\Wow6432Node\AppID
+            $global:AppIDPathList = New-Object @{} # Store AppID path for each CLSID
             $global:totalResults.Clear() # Clear total results
             $global:CachedObjectList.Clear() # Clear cached DCOM object information list
             if(!(Start-NamedPipe-Server -Username $Username -Password $Password)) { # Initiate namedpipe server
@@ -2726,21 +2726,23 @@ function Get-ObjectInfo {
 
 }
 
-function Get-CLSIDPath {
+function Get-AppIDPath {
     [CmdletBinding(SupportsShouldProcess=$true)]
     [OutputType([System.Boolean])]
     param (
         [Parameter(Mandatory = $true)]
-        [string]$clsid
+        [string]$CLSID
     )
+    # This function is responsible to resolve AppID path from CLSID
+    if(Find-InArray -Content $CLSID -Array $global:AppIDPathList.Keys) {
+        return $global:AppIDPathList[$CLSID]
+    }
     
-    # This function is responsible to resolve CLSID path
-    foreach($RegistryLocation in @("SOFTWARE\Classes\AppID", "SOFTWARE\Classes\Wow6432Node\AppID")) {
-        if(!(Find-InArray -Content $RegistryLocation -Array $global:AppIDDictionary.Keys)){
-            $global:AppIDDictionary[$RegistryLocation] = Get-RegKeyName -Key $RegistryLocation
-        }
-        if(Find-InArray -Content $clsid -Array $global:AppIDDictionary[$RegistryLocation]) {
-            return "$($RegistryLocation)\$($clsid)"
+    foreach($RegistryLocation in @("SOFTWARE\Classes", "SOFTWARE\Classes\Wow6432Node")) {
+        $AppID = Read-RegString -Key "$($RegistryLocation)\CLSID\$($CLSID)" -Value "AppID"
+        if($AppID) {
+            $global:AppIDPathList[$CLSID] = "$($RegistryLocation)\AppID\$($AppID)"
+            return $global:AppIDPathList[$CLSID]
         }
     }
     return $false
@@ -2760,8 +2762,7 @@ function Get-DCOMObjectList {
     Write-Log -Level INFO -Message "Collecting CLSIDs (Go to make a coffee, it may take a time..)"
 
     foreach($RegistryPath in @('SOFTWARE\Classes\AppID', 'SOFTWARE\Classes\WOW6432Node\AppID')) { # Collect AppID list from each environment
-        $global:AppIDDictionary[$RegistryPath] = Get-RegKeyName -Key $RegistryPath
-        $AllAppIDs += $global:AppIDDictionary[$RegistryPath]
+        $AllAppIDs += Get-RegKeyName -Key $RegistryPath
     }
     $AllAppIDs = $AllAppIDs|select -Unique
     $ScannedList = New-Object System.Collections.ArrayList # Contains scanned list
@@ -3068,9 +3069,9 @@ function Invoke-DCOMObjectRightAnalyzer {
     } else {
         $clsid = Wrap-CLSID -ObjectName $ObjectName
     }
-    $ObjectPath = Get-CLSIDPath -clsid $clsid
-    # Sometimes, not all the objects appear in the AppID list, and when that is the situation, the OS will enforce the default rights
-    if(!$ObjectPath) {
+    $AppIDPath = Get-AppIDPath -CLSID $clsid
+    # if the Object does not enforce specific permissions, check the default rights
+    if(!$AppIDPath) {
         return $DefaultChecks
     }
     $PermissionStatus = @{ # Required values to check/patch
@@ -3079,9 +3080,9 @@ function Invoke-DCOMObjectRightAnalyzer {
     if(!(is-LoopBack -RemoteIP $RemoteIP)) {
         $PermissionStatus['AccessPermission'] = @{"Status"=$false; "Type"="Access"};
     }
-    $existsKeys = Get-RegValueName -Key $ObjectPath
+    $existsKeys = Get-RegValueName -Key $AppIDPath
     $Keys = {$($PermissionStatus.Keys|?{$_})}.Invoke() # Clone PermissionStatus list
-    foreach($valName in $Keys) { # If the DCOM Object does not contain the required values, remove them, it supposed to be based on the default rights
+    foreach($valName in $Keys) { # If the DCOM Object does not contains the required values, remove them, it supposed to be based on the default rights
         if(!(Find-InArray -Content $valName -Array $existsKeys)) {
             $PermissionStatus.Remove($valName)
         }
@@ -3092,7 +3093,7 @@ function Invoke-DCOMObjectRightAnalyzer {
         return $DefaultChecks
     }
 
-    $status = Invoke-SecurityRightAnalyzer -RemoteIP $RemoteIP -Path $ObjectPath -PermissionHashTable $PermissionStatus -AutoGrant:$AutoGrant -DefaultResult $DefaultChecks
+    $status = Invoke-SecurityRightAnalyzer -RemoteIP $RemoteIP -Path $AppIDPath -PermissionHashTable $PermissionStatus -AutoGrant:$AutoGrant -DefaultResult $DefaultChecks
     
     if($status) {
         Write-Log -Level VERBOSE -Message "Your identity is granted to launch and access the $($ObjectName) object!"
