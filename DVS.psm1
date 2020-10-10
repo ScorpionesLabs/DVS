@@ -406,16 +406,20 @@ Function Enum-HostList {
     foreach($HostItem in $HostList.Split(",")) {
         $HostItem = $HostItem.Trim()
         if(!($HostItem -match $global:IPRegex -or $HostItem.Contains("/"))) {
-            $IPAddress = Get-GetHostByName -Hostname $HostItem
-            if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
-                % { "127.0.0.1"}
+            try {
+                $IPAddress = Get-GetHostByName -Hostname $HostItem
+            } catch {
                 continue
             }
-            %{$IPAddress}
+            if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
+                ForEach-Object { "127.0.0.1"}
+                continue
+            }
+            ForEach-Object{$IPAddress}
             continue
         }
         if(!($HostItem.Contains("/"))) {
-            %{$HostItem}
+            ForEach-Object{$HostItem}
             continue
         }
         $NetworkAddress = ($HostItem.split("/"))[0]
@@ -429,10 +433,10 @@ Function Enum-HostList {
             [Array]::Reverse($IPAddress)
             $IPAddress = ([System.Net.IPAddress]($IPAddress)).IPAddressToString
             if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
-                %{"127.0.0.1"}
+                ForEach-Object{"127.0.0.1"}
                 continue
             }
-            %{$IPAddress}
+            ForEach-Object{$IPAddress}
         }
     }
 }
