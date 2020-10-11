@@ -2196,10 +2196,7 @@ function Read-File {
         }
         return
     }
-    $data = $reader.ReadToEnd()
-    $reader.Close()
-    $reader.Dispose()
-    return $data
+    return $reader.ReadToEnd()
 
 }
 
@@ -3605,20 +3602,13 @@ function Invoke-DCOMObjectScan {
         if($SaveState) {
             try {
                 if([System.IO.File]::Exists($global:ScanStateFileName)) {
-                    if((Read-Host "The DVS Detected that you have a non-completed scan. do you want to continue the previous scan? (Y/n)").ToLower() -eq "n") {
-                        $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName)
-                
-                    } else {
+                    if((Read-Host "The DVS Detected that you have a non-completed scan. do you want to continue the previous scan? (Y/n)").ToLower() -ne "n") {
                         Write-Log -Level VERBOSE -Message "Restoring previous state.."
                         $ScannedObjects = ConvertFrom-CliXml -InputObject (Read-File -FileName $global:ScanStateFileName)
-                        $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName, $true)
-                        
                     }
-                } else {
-                    $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName, $true)
                 }
             } catch {
-                Write-Log -Level ERROR -Message "Can't Access $($global:ScanStateFileName) because the file is locked! Please release or remove the file and try again."
+                Write-Log -Level ERROR -Message $_
                 return
             }
 
@@ -3687,8 +3677,11 @@ function Invoke-DCOMObjectScan {
                             $ScannedObjects[$RemoteIP] = New-Object System.Collections.ArrayList
                         }
                         $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
+                        $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName)
                         $ScanStateStream.Write((ConvertTo-CliXml -InputObject $ScannedObjects))
                         $ScanStateStream.Flush()
+                        $ScanStateStream.Close()
+                        $ScanStateStream.Dispose()
                     }
                     Write-Log -Level INFO -Message  "$($ObjectName) Scanned!"
                 }
@@ -3702,10 +3695,6 @@ function Invoke-DCOMObjectScan {
     } catch {
         Write-Log -Level ERROR -Message $_
     } finally {
-        if($SaveState -and $ScanStateStream) {
-            $ScanStateStream.Close()
-            $ScanStateStream.Dispose()
-        }
         Start-DefaultTasks -Type Finish|Out-Null
     }
 }
