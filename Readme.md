@@ -165,9 +165,10 @@ Invoke-DCOMObjectScan function allows you to scan DCOM objects and find vulnerab
 
             PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type List -ObjectListFile "C:\Users\USERNAME\Desktop\DVS\objects.txt" -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -AutoGrant -Username "lab\administrator" -Password "Aa123456!" -Hostlist "10.211.55.4" -MaxResults 1 -Verbose
 
-  6. Scans all the objects stored on the available remote machines from the `10.211.55.1/24` range and finds potential vulnerable functions from the list located on the selected file (e.g. `C:\Users\USERNAME\Desktop\DVS\vulnerable.txt`).
+  6. Scans all the objects stored on the available remote machines from the `10.211.55.1/24` range and finds potential vulnerable functions from the list located on the selected file (e.g. `C:\Users\USERNAME\Desktop\DVS\vulnerable.txt`), and skip property with the same name on other routes on the same object.
+        *NOTE:* The `SkipSameProperyName` flag might miss vulnerable functions when there is the same property name with different preferences(Methods/other properties) or different depth chain.
 
-            PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -Verbose
+            PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -SkipSameProperyName -Verbose
 
 
 #### Get-ExecutionCommand
