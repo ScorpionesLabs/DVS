@@ -3329,7 +3329,8 @@ function Invoke-DCOMAnalyzer {
         [string]$RemoteIP,
         [System.Int32]$MaxResults=0,
         [switch]$SkipRegAuth,
-        [switch]$CheckAccessOnly
+        [switch]$CheckAccessOnly,
+        [switch]$SkipSameProperyName
     )
     # This function is responsible to probe and analyze DCOM access, then create a DCOM object and enumerate it
     
@@ -3343,7 +3344,7 @@ function Invoke-DCOMAnalyzer {
     }
     try {
         $Blacklist = New-Object System.Collections.ArrayList # Path blacklist in order to prevent race conditions
-        Enumerate-DCOMObject -Blacklist $Blacklist -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults -SkipRegAuth:$SkipRegAuth|Out-Null
+        Enumerate-DCOMObject -Blacklist $Blacklist -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName|Out-Null
     } catch {
         Write-Log -Level ERROR -Message $_
     }
@@ -3366,7 +3367,8 @@ function Enumerate-DCOMObject {
         [System.Int32]$MaxResults=0,
         [Parameter(Mandatory = $true)]
         [string]$RemoteIP,
-        [switch]$SkipRegAuth
+        [switch]$SkipRegAuth,
+        [switch]$SkipSameProperyName
     )
     try {
         # This function is responsible to enumerate COM objects recursive until the depth is equal to the MaxDepth
@@ -3419,9 +3421,13 @@ function Enumerate-DCOMObject {
                 continue         
                     
             }
-            $ClonedBlacklist = {$($Blacklist|?{$_})}.Invoke()
+            if($SkipSameProperyName) {
+               $ClonedBlacklist = $Blacklist
+            } else {
+                $ClonedBlacklist = {$($Blacklist|?{$_})}.Invoke()
+            }
             $ClonedBlacklist.Add($MemberInfo.Name)| Out-Null # Add the property to the blacklist
-            Enumerate-DCOMObject -MaxResults $MaxResults -Blacklist $ClonedBlacklist -PropertyName $MemberInfo.Name -ObjectPath $FullObjectPath -ObjectName $ObjectName -MaxDepth $MaxDepth -CurrentDepth $CurrentDepth -RemoteIP $RemoteIP -SkipRegAuth:$SkipRegAuth
+            Enumerate-DCOMObject -MaxResults $MaxResults -Blacklist $ClonedBlacklist -PropertyName $MemberInfo.Name -ObjectPath $FullObjectPath -ObjectName $ObjectName -MaxDepth $MaxDepth -CurrentDepth $CurrentDepth -RemoteIP $RemoteIP -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName
 
         }
 
@@ -3489,6 +3495,13 @@ function Invoke-DCOMObjectScan {
         .PARAMETER CheckAccessOnly
         Show you only accessible DCOM objects without scanning.
 
+        .PARAMETER SkipSameProperyName
+        Skip property with the same name on other routes on the same object.
+        For example:
+            if the script explores the following path in com object: COM_NAME.Application (Property Name: Application),
+            The script will not explore the following path: COM_NAME.Parent.Application,
+        NOTE: This flag might miss vulnerable functions when there is the same property name with different preferences(Methods/other properties) or different depth chain
+
         .PARAMETER SkipPermissionChecks
         Try to blindly launch the remote object, without checking if the principal-identity have access to it using (Will not analyze ACL permissions).
         This flag is created to solve the edge-case in which the tool have read access to the HKLM Hive, but can't resolve the groups the current logged-on/provided user is a member of.
@@ -3538,9 +3551,9 @@ function Invoke-DCOMObjectScan {
 
         .EXAMPLE
 
-        Scans all the objects stored on the available remote machines from the 10.211.55.1/24 range and finds potential vulnerable functions from the list located on the selected file (e.g. C:\Users\USERNAME\Desktop\DVS\vulnerable.txt).
-
-        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -Verbose
+        Scans all the objects stored on the available remote machines from the 10.211.55.1/24 range and finds potential vulnerable functions from the list located on the selected file (e.g. C:\Users\USERNAME\Desktop\DVS\vulnerable.txt), and skip property with the same name on other routes on the same object.
+        NOTE: The SkipSameProperyName flag might miss vulnerable functions when there is the same property name with different preferences(Methods/other properties) or different depth chain
+        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -SkipSameProperyName -Verbose
     #>
     [CmdletBinding(SupportsShouldProcess=$true)]
     param
@@ -3559,7 +3572,8 @@ function Invoke-DCOMObjectScan {
         [switch]$AutoGrant,
         [switch]$CheckAccessOnly,
         [switch]$SkipRegAuth,
-        [switch]$SkipPermissionChecks
+        [switch]$SkipPermissionChecks,
+        [switch]$SkipSameProperyName
     )
     try {
         Start-DefaultTasks -Type Init|Out-Null
@@ -3615,83 +3629,92 @@ function Invoke-DCOMObjectScan {
         }
         $Username = Check-Username -Username $Username
         Write-Log -Level INFO -Message "[+] Scanning started."
-        foreach($RemoteIP in (Enum-HostList -HostList $Hostlist)) {
-            try {
-                if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
-                    continue
-                }
-
-                if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
-                    if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
-                        Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
+        try {
+            foreach($RemoteIP in (Enum-HostList -HostList $Hostlist)) {
+                try {
+                    if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
                         continue
                     }
 
-                    if(!$SkipPermissionChecks) { # If SkipPermissionChecks is not specified
-                        if(!(Test-DCOMStatus -AutoGrant:$AutoGrant)) {
+                    if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
+                        if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
+                            Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
                             continue
                         }
-                        $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
-                        $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
+
+                        if(!$SkipPermissionChecks) { # If SkipPermissionChecks is not specified
+                            if(!(Test-DCOMStatus -AutoGrant:$AutoGrant)) {
+                                continue
+                            }
+                            $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
+                            $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
+                        }
                     }
-                }
         
                 
 
-                & {
-                    switch($Type) {
-                        "All" {
-                            Get-DCOMObjectList -RemoteIP $RemoteIP
-                            break
+                    & {
+                        switch($Type) {
+                            "All" {
+                                Get-DCOMObjectList -RemoteIP $RemoteIP
+                                break
+                            }
+                            "List" {
+                                (Read-File -FileName $ObjectListFile -AsArray) | Select -Unique| Sort-Object {Get-Random}
+                                break
+                            }
+                            "Single" {
+                                %{ $ObjectName }
+                                break
+                            }
                         }
-                        "List" {
-                            (Read-File -FileName $ObjectListFile -AsArray) | Select -Unique| Sort-Object {Get-Random}
-                            break
-                        }
-                        "Single" {
-                            %{ $ObjectName }
-                            break
-                        }
-                    }
-                }| ForEach {
-                    $ObjectName = Wrap-CLSID -ObjectName $_
+                    }| ForEach {
+                        $ObjectName = Wrap-CLSID -ObjectName $_
                     
-                    if($SaveState) {
-                        if(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys) {
-                            if(Find-InArray -Content $ObjectName -Array $ScannedObjects[$RemoteIP]) {
-                                Write-Log -Level VERBOSE -Message "Skipping $($ObjectName) object!"
+                        if($SaveState) {
+                            if(!(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys)) {
+                                $ScannedObjects[$RemoteIP] = New-Object System.Collections.ArrayList
+                            }
+                            if(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys) {
+                                if(Find-InArray -Content $ObjectName -Array $ScannedObjects[$RemoteIP]) {
+                                    Write-Log -Level VERBOSE -Message "Skipping $($ObjectName) object!"
+                                    continue
+                                }
+                            }
+                        }
+                        if(!$SkipRegAuth -and !$SkipPermissionChecks) {
+                            $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
+                            if(!$CLSIDChecks) {
+                                Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
+                                $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
                                 continue
                             }
                         }
-                    }
-                    if(!$SkipRegAuth -and !$SkipPermissionChecks) {
-                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
-                        if(!$CLSIDChecks) {
-                            Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
-                            continue
+                        Invoke-DCOMAnalyzer -ObjectName $ObjectName -MaxDepth $MaxDepth -MaxResults $MaxResults -RemoteIP $RemoteIP -CheckAccessOnly:$CheckAccessOnly -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName|Out-Null
+                        if($SaveState) {
+                            $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
+                            $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName)
+                            $ScanStateStream.Write((ConvertTo-CliXml -InputObject $ScannedObjects))
+                            $ScanStateStream.Flush()
+                            $ScanStateStream.Close()
+                            $ScanStateStream.Dispose()
                         }
+                        Write-Log -Level INFO -Message  "$($ObjectName) Scanned!"
                     }
-                    Invoke-DCOMAnalyzer -ObjectName $ObjectName -MaxDepth $MaxDepth -MaxResults $MaxResults -RemoteIP $RemoteIP -CheckAccessOnly:$CheckAccessOnly -SkipRegAuth:$SkipRegAuth|Out-Null
-                    if($SaveState) {
-                        if(!(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys)) {
-                            $ScannedObjects[$RemoteIP] = New-Object System.Collections.ArrayList
-                        }
-                        $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
-                        $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName)
-                        $ScanStateStream.Write((ConvertTo-CliXml -InputObject $ScannedObjects))
-                        $ScanStateStream.Flush()
-                        $ScanStateStream.Close()
-                        $ScanStateStream.Dispose()
-                    }
-                    Write-Log -Level INFO -Message  "$($ObjectName) Scanned!"
+                } catch {
+                    Write-Log -Level ERROR -Message $_
                 }
-            } catch {
-                Write-Log -Level ERROR -Message $_
-            } finally {
-                Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
             }
-        }
 
+        } catch {
+            Write-Log -Level ERROR -Message $_
+        } finally {
+             Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
+        }
+    Write-Log -Level INFO -Message "Scanning finished!"
+    if([System.IO.File]::Exists($global:ScanStateFileName)){
+        [System.IO.File]::Delete($global:ScanStateFileName)
+    }
     } catch {
         Write-Log -Level ERROR -Message $_
     } finally {
