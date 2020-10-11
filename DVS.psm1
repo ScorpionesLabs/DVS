@@ -61,9 +61,10 @@ $global:LocalAccessRights = @(
     $FullControl
 )
 
-# Log locations
+# Log, results and state file locations
 $global:LogFileName = "$($(Get-Location).Path)\log.txt"
 $global:ResultsFileName = "$($(Get-Location).Path)\results.csv"
+$global:ScanStateFileName = "$($(Get-Location).Path)\restore.dvs"
 
 # Regex for fetch argument list of function
 [regex]$global:regexFunctionArgs = "\(.*\)"
@@ -402,16 +403,17 @@ Function Enum-HostList {
         [string]$HostList
     )
     # This function is responsible to collect hostlist (seperated by comma), detect if the host is ipaddress/CIDR range or hostname, and resolve them.
-    $IPAddressList = Get-MachineIPAddresses
+    $MachineIPAddressList = Get-MachineIPAddresses
     foreach($HostItem in $HostList.Split(",")) {
         $HostItem = $HostItem.Trim()
         if(!($HostItem -match $global:IPRegex -or $HostItem.Contains("/"))) {
             try {
                 $IPAddress = Get-GetHostByName -Hostname $HostItem
             } catch {
+                Write-Log -Level ERROR -Message $_
                 continue
             }
-            if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
+            if(Find-InArray -Content $IPAddress -Array $MachineIPAddressList) {
                 ForEach-Object { "127.0.0.1"}
                 continue
             }
@@ -432,7 +434,7 @@ Function Enum-HostList {
             $IPAddress = ([System.Net.IPAddress]($LongIP+$IPGap)).GetAddressBytes()
             [Array]::Reverse($IPAddress)
             $IPAddress = ([System.Net.IPAddress]($IPAddress)).IPAddressToString
-            if(Find-InArray -Content $IPAddress -Array $IPAddressList) {
+            if(Find-InArray -Content $IPAddress -Array $MachineIPAddressList) {
                 ForEach-Object{"127.0.0.1"}
                 continue
             }
@@ -786,7 +788,7 @@ function IIf {
     return $Wrong
 }
 
-function Start-ImpersonationSession {
+function Start-RunAsSession {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $True)]
@@ -900,7 +902,7 @@ function Start-NamedPipe-Server {
         [string]$Password
     )
 
-    # This function is responsible to create a new process using Start-ImpersonationSession function, and inject the server payload
+    # This function is responsible to create a new process using Start-RunAsSession function, and inject the server payload
 
     $ServerContent = @'
 $global:reg = ""
@@ -1326,7 +1328,7 @@ function Get-ObjMember {
 
         if($ObjectPath) {
             if(!$COMSnapshots[$ObjectPath]) {
-                return $flase, "$($ObjectPath) Object path is unresolvable!"
+                return $flase, "$($ObjectPath) Object path is empty or unresolvable!"
             }
             return $true, $COMSnapshots[$ObjectPath].psobject.Members
         }
@@ -1924,7 +1926,7 @@ Start-NamedPipeManager -pipeName [DVS_NAME]
         }
         
         $IsLoopback = is-LoopBack -RemoteIP $RemoteIP
-        if(!(Start-ImpersonationSession -NetOnly:([bool](!($IsLoopback))) -Domain $Domain -Username $Username -Password $Password -Filename "$env:windir\System32\cmd.exe" -Arguments (('/c "' + $PSHOME + '\powershell.exe" -noprofile - < \\.\pipe\\' + $global:NamedPipe)))) {
+        if(!(Start-RunAsSession -NetOnly:([bool](!($IsLoopback))) -Domain $Domain -Username $Username -Password $Password -Filename "$env:windir\System32\cmd.exe" -Arguments (('/c "' + $PSHOME + '\powershell.exe" -noprofile - < \\.\pipe\\' + $global:NamedPipe)))) {
             Write-Log -Level ERROR -Message "DVS Can't run"
             return $false
         }
@@ -2194,7 +2196,10 @@ function Read-File {
         }
         return
     }
-    return $reader.ReadToEnd()
+    $data = $reader.ReadToEnd()
+    $reader.Close()
+    $reader.Dispose()
+    return $data
 
 }
 
@@ -3561,7 +3566,7 @@ function Invoke-DCOMObjectScan {
     )
     try {
         Start-DefaultTasks -Type Init|Out-Null
-
+        $SaveState = $true # Save scan state, unless the scan type is a single object.
         switch($Type) {
             "All" {
                 if($SkipRegAuth) {
@@ -3582,6 +3587,7 @@ function Invoke-DCOMObjectScan {
                     Write-Log -Level ERROR "ObjectName is not specified!"
                     return
                 }
+                $SaveState = $false
                 break
             }
         }
@@ -3594,6 +3600,28 @@ function Invoke-DCOMObjectScan {
             if(!$(Parse-FunctionListFile -FileLocation $FunctionListFile)) {
                 return
             }
+        }
+        $ScannedObjects = @{}
+        if($SaveState) {
+            try {
+                if([System.IO.File]::Exists($global:ScanStateFileName)) {
+                    if((Read-Host "The DVS Detected that you have a non-completed scan. do you want to continue the previous scan? (Y/n)").ToLower() -eq "n") {
+                        $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName)
+                
+                    } else {
+                        Write-Log -Level VERBOSE -Message "Restoring previous state.."
+                        $ScannedObjects = ConvertFrom-CliXml -InputObject (Read-File -FileName $global:ScanStateFileName)
+                        $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName, $true)
+                        
+                    }
+                } else {
+                    $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName, $true)
+                }
+            } catch {
+                Write-Log -Level ERROR -Message "Can't Access $($global:ScanStateFileName) because the file is locked! Please release or remove the file and try again."
+                return
+            }
+
         }
         $Username = Check-Username -Username $Username
         Write-Log -Level INFO -Message "[+] Scanning started."
@@ -3637,6 +3665,15 @@ function Invoke-DCOMObjectScan {
                     }
                 }| ForEach {
                     $ObjectName = Wrap-CLSID -ObjectName $_
+                    
+                    if($SaveState) {
+                        if(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys) {
+                            if(Find-InArray -Content $ObjectName -Array $ScannedObjects[$RemoteIP]) {
+                                Write-Log -Level VERBOSE -Message "Skipping $($ObjectName) object!"
+                                continue
+                            }
+                        }
+                    }
                     if(!$SkipRegAuth -and !$SkipPermissionChecks) {
                         $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
                         if(!$CLSIDChecks) {
@@ -3645,6 +3682,14 @@ function Invoke-DCOMObjectScan {
                         }
                     }
                     Invoke-DCOMAnalyzer -ObjectName $ObjectName -MaxDepth $MaxDepth -MaxResults $MaxResults -RemoteIP $RemoteIP -CheckAccessOnly:$CheckAccessOnly -SkipRegAuth:$SkipRegAuth|Out-Null
+                    if($SaveState) {
+                        if(!(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys)) {
+                            $ScannedObjects[$RemoteIP] = New-Object System.Collections.ArrayList
+                        }
+                        $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
+                        $ScanStateStream.Write((ConvertTo-CliXml -InputObject $ScannedObjects))
+                        $ScanStateStream.Flush()
+                    }
                     Write-Log -Level INFO -Message  "$($ObjectName) Scanned!"
                 }
             } catch {
@@ -3657,6 +3702,10 @@ function Invoke-DCOMObjectScan {
     } catch {
         Write-Log -Level ERROR -Message $_
     } finally {
+        if($SaveState -and $ScanStateStream) {
+            $ScanStateStream.Close()
+            $ScanStateStream.Dispose()
+        }
         Start-DefaultTasks -Type Finish|Out-Null
     }
 }
