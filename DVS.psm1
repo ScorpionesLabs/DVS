@@ -13,7 +13,10 @@ $global:NamedPipe = "DVS" # Namedpipe name
 $global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
 $global:converter = New-Object System.Management.ManagementClass Win32_SecurityDescriptorHelper # Security Descriptor converter
 $global:SleepMilisecondsTime = 50 # How long time to sleep until get response
-$global:nonVulnerableArguments = @("int", "uint", "ushort", "ulong", "bool") # If the function contains THESE SPECIFIC VARIANTS ONLY, assert the function as not vulnerable
+
+# If the function contains THESE SPECIFIC VARIANTS ONLY, assert the function as not vulnerable
+# Note: Don't use spaces, in the checking process, the tool will remove spaces from the function arguments 
+$global:nonVulnerableArguments = @("int", "uint", "ushort", "ulong", "bool", "doublevalue", "longvalue", "intmonths", "intvalue", "longvalue")
 
 <# Access mask calculation:
 
@@ -2257,7 +2260,7 @@ function Check-FunctionExploitationPossibility {
     }
     
     foreach($arg in $funcArgs.Split(",")) {
-        $arg = $arg.Trim()
+        $arg = $arg.Trim().replace(" ", "")
         if($arg -and !(Find-InArray -Content $arg -Array $global:nonVulnerableArguments)) {
             return $true
         }
@@ -3714,8 +3717,12 @@ function Invoke-DCOMObjectScan {
             try {
                 if([System.IO.File]::Exists($global:ScanStateFileName)) {
                     if((Read-Host "The DVS Detected that you have a non-completed scan. do you want to continue the previous scan? (Y/n)").ToLower() -ne "n") {
-                        Write-Log -Level VERBOSE -Message "Restoring previous state.."
-                        $ScannedObjects = ConvertFrom-CliXml -InputObject (Read-File -FileName $global:ScanStateFileName)
+                        try {
+                            $ScannedObjects = ConvertFrom-CliXml -InputObject (Read-File -FileName $global:ScanStateFileName)
+                            Write-Log -Level VERBOSE -Message "Restoring previous state.."
+                        } catch {
+                            Write-Log -Level ERROR -Message "$($_) (Can't restore the last state.)"
+                        }
                     }
                 }
             } catch {
