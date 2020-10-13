@@ -2257,7 +2257,8 @@ function Check-FunctionExploitationPossibility {
     }
     
     foreach($arg in $funcArgs.Split(",")) {
-        if(!(Find-InArray -Content $arg -Array $global:nonVulnerableArguments)) {
+        $arg = $arg.Trim()
+        if($arg -and !(Find-InArray -Content $arg -Array $global:nonVulnerableArguments)) {
             return $true
         }
     }
