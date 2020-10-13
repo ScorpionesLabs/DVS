@@ -1316,29 +1316,6 @@ function Start-COMObjectInstance {
     
 }
 
-function Get-ObjMember {
-    param(
-        $ObjectPath
-    )
-    # This function is responsible to resolve members of object
-    return Invoke-CodeWithTimeout -Code {
-        param(
-            $COMObject,
-            $COMSnapshots,
-            $ObjectPath
-        )
-
-        if($ObjectPath) {
-            if(!$COMSnapshots[$ObjectPath]) {
-                return $flase, "$($ObjectPath) Object path is empty or unresolvable!"
-            }
-            return $true, $COMSnapshots[$ObjectPath].psobject.Members
-        }
-        return $true, $COMObject.psobject.Members
-    } -Arguments @($global:COMObject, $global:COMSnapshots, $ObjectPath) -Timeout $global:COMTimeout
-    
-}
-
 function Get-ObjectMembers {
     [OutputType([System.array])]
     param(
@@ -1348,7 +1325,22 @@ function Get-ObjectMembers {
     # This function is responsible to order and resolve members of com object
     try {
 
-        $status, $results = Get-ObjMember -ObjectPath $ObjectPath
+        $status, $results =  Invoke-CodeWithTimeout -Code {
+            param(
+                $COMObject,
+                $COMSnapshots,
+                $ObjectPath
+            )
+
+            if($ObjectPath) {
+                if(!$COMSnapshots[$ObjectPath]) {
+                    return $flase, "$($ObjectPath) Object path is empty or unresolvable!"
+                }
+                return $true, $COMSnapshots[$ObjectPath].psobject.Members
+            }
+            return $true, $COMObject.psobject.Members
+        } -Arguments @($global:COMObject, $global:COMSnapshots, $ObjectPath) -Timeout $global:COMTimeout
+
         $items = New-Object System.Collections.ArrayList
         if(!$status) {
             return $false, $results
@@ -2016,9 +2008,7 @@ function Start-DefaultTasks {
             if(!$global:isNamedpipeStarted) {
                 return $true
             }
-            if(Quit-COMObject) {
-                Write-Log -Level VERBOSE -Message "COM Object quitted successfully"
-            }
+            
             if($AutoGrant) {
                 Rev2Self
             }
@@ -3314,10 +3304,7 @@ function Get-FunctionParameters {
 function Quit-COMObject {
     param()
     $res = Invoke-NamedpipeMission -MissionInfo @{FunctionName="Quit-COMObject"}
-    if([bool]$res.IsSuccess) {
-        return [string]$res.Result
-    }
-    return ""
+    return $res.IsSuccess
 }
 
 function Test-DCOMStatus {
@@ -3414,15 +3401,20 @@ function Invoke-DCOMAnalyzer {
     if(!(Start-COMObjectInstance -ObjectName $ObjectName -RemoteIP $RemoteIP)) { # if the object is unresolvable, return
         return
     }
-    Write-Log -Level INFO -Message  "Scanning $($ObjectName) object.."
-    if($CheckAccessOnly) { # if CheckAccessOnly flagged, add the object name to the results file and finish
-        Add-Result -ObjectName $ObjectName -ObjectPath "" -RemoteIP $RemoteIP -CheckAccessOnly -SkipRegAuth:$SkipRegAuth
-        return
-    }
+
     try {
+        Write-Log -Level INFO -Message  "Scanning $($ObjectName) object.."
+        if($CheckAccessOnly) { # if CheckAccessOnly flagged, add the object name to the results file and finish
+            Add-Result -ObjectName $ObjectName -ObjectPath "" -RemoteIP $RemoteIP -CheckAccessOnly -SkipRegAuth:$SkipRegAuth
+            return
+        }
         Enumerate-DCOMObject -Blacklist (New-Object System.Collections.ArrayList) -ObjectName $ObjectName -MaxDepth $MaxDepth -RemoteIP $RemoteIP -MaxResults $MaxResults -SkipRegAuth:$SkipRegAuth -SkipSameProperyName:$SkipSameProperyName|Out-Null
     } catch {
         Write-Log -Level ERROR -Message $_
+    } finally {
+        if(Quit-COMObject) {
+            Write-Log -Level VERBOSE -Message "$($ObjectName) COM Object quitted successfully"
+        }
     }
     
 }
@@ -4018,6 +4010,9 @@ function Get-ExecutionCommand {
             } catch {
                 Write-Log -Level ERROR -Message $_
             } finally {
+                if(Quit-COMObject) {
+                    Write-Log -Level VERBOSE -Message "$($ObjectName) COM Object quitted successfully"
+                }
                 Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
             }
         }
@@ -4183,6 +4178,9 @@ function Invoke-ExecutionCommand {
             } catch {
                 Write-Log -Level ERROR -Message $_
             } finally {
+                if(Quit-COMObject) {
+                    Write-Log -Level VERBOSE -Message "$($ObjectName) COM Object quitted successfully"
+                }
                 Start-DefaultTasks -Type EndTask -AutoGrant:$AutoGrant|Out-Null
             }
         }
@@ -4524,7 +4522,9 @@ function Invoke-RegisterRemoteSchema {
                     if(!$isHKLM) {
                         Test-RegistryConnection -RemoteIP $RemoteIP -CheckWritePermissions -Hive HKLM|Out-Null
                     }
-                    Rev2Self
+                }
+                if(Quit-COMObject) {
+                    Write-Log -Level VERBOSE -Message "$($ObjectName) COM Object quitted successfully"
                 }
                 Start-DefaultTasks -Type EndTask|Out-Null
             }
