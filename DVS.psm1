@@ -20,7 +20,9 @@ $global:SleepMilisecondsTime = 50 # How long time to sleep until get response
     Local Launch/Access: 2
     Remote Launch/Access: 4
     Local Activation: 8
-    Remote Activation = 16
+    Remote Activation: 16
+
+    Reference: https://docs.microsoft.com/en-us/windows/win32/com/access-control-lists-for-com
 
 #>
 
