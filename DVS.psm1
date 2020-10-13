@@ -13,6 +13,7 @@ $global:NamedPipe = "DVS" # Namedpipe name
 $global:NamedpipeResponseTimeout = 5 # Namedpipe communication timeout
 $global:converter = New-Object System.Management.ManagementClass Win32_SecurityDescriptorHelper # Security Descriptor converter
 $global:SleepMilisecondsTime = 50 # How long time to sleep until get response
+$global:nonVulnerableArguments = @("int", "uint", "ushort", "ulong", "bool") # If the function contains THESE SPECIFIC VARIANTS ONLY, assert the function as not vulnerable
 
 <# Access mask calculation:
 
@@ -2158,7 +2159,9 @@ Function Add-Result {
     if(!(Find-InArray -Content $ObjectName -Array $global:CachedData['totalResults'].Keys)) { # If the object does not have results, create a new counter for it.
         $global:CachedData['totalResults'][$ObjectName] = 0
     }
-    
+    if(!$CLSIDCommand -and !$ProgIdCommand) { # If there is no access to the function, return.
+        return
+    }
     $global:CachedData['totalResults'][$ObjectName] += 1 # Count results for each DCOM object
     # Add result row
     Add-ResultRow -ResultRow @($RemoteIP, $progName, $clsid, $ProgID, $VersionIndependentProgID, $ObjectPath, $CLSIDCommand, $ProgIdCommand, $Library_32, $Library_64)
@@ -2248,9 +2251,15 @@ function Check-FunctionExploitationPossibility {
     )
 
     # Checks if the function contains exploitable arguments
-    $funcArgs = ($global:regexFunctionArgs.Match($OverloadDefinitions).Value).ToLower()
-    if($funcArgs.Contains("string") -or $funcArgs.Contains("variant")) {
-        return $true
+    $funcArgs = ($global:regexFunctionArgs.Match($OverloadDefinitions).Value).ToString().ToLower().Trim().TrimStart("(").TrimEnd(")")
+    if(!$funcArgs) {
+        return $false
+    }
+    
+    foreach($arg in $funcArgs.Split(",")) {
+        if(!(Find-InArray -Content $arg -Array $global:nonVulnerableArguments)) {
+            return $true
+        }
     }
     return $false
 }
@@ -2755,12 +2764,17 @@ function Get-ProgID {
     }
     
     foreach($pathLoc in @('SOFTWARE\Classes\CLSID', 'SOFTWARE\Classes\WOW6432Node\CLSID')) {
+        $KeyNames = Get-RegKeyName -Key "$($pathLoc)\$($CLSID)"
+        if(!(Find-InArray -Content $ProgIDType -Array $KeyNames)) {
+            continue
+        }
         $ProgID = Read-RegString -Key "$($pathLoc)\$($CLSID)\$($ProgIDType)" -Value ""
         if($ProgID) {
             $global:CachedData[$CacheObjectName][$CLSID] =  Read-RegString -Key "$($pathLoc)\$($CLSID)\$($ProgIDType)" -Value ""
             return $global:CachedData[$CacheObjectName][$CLSID]
         }
     }
+    $global:CachedData[$CacheObjectName][$CLSID] = ""
     return ""
 }
 
